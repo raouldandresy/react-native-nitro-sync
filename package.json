@@ -1,6 +1,6 @@
 {
   "name": "react-native-nitro-sync",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Local-first e offline-first synchronization engine for React Native with synchronous Nitro Modules, SQLite persistence, optimistic mutations, and backend-agnostic transport.",
   "license": "MIT",
   "main": "lib/commonjs/index.js",
