@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@op-engineering/op-sqlite": "^18.2.5",
-    "expo": "~52.0.0",
+    "expo": "~57.0.24",
     "expo-asset": "~11.0.5",
     "expo-linking": "~7.0.5",
     "expo-router": "~4.0.0",
