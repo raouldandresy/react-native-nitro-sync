@@ -1,0 +1,27 @@
+{
+  "expo": {
+    "name": "Nitro Sync Example",
+    "slug": "nitro-sync-example",
+    "scheme": "nitrosync",
+    "plugins": [
+      [
+        "react-native-nitro-sync",
+        {
+          "backgroundTaskIdentifier": "com.example.nitrosync"
+        }
+      ],
+      "expo-router",
+      "expo-asset"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "ios": {
+      "bundleIdentifier": "com.example.nitrosync"
+    },
+    "android": {
+      "package": "com.example.nitrosync"
+    },
+    "newArchEnabled": true
+  }
+}

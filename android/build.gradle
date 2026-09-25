@@ -1,0 +1,43 @@
+buildscript {
+  ext.kotlin_version = project.hasProperty('kotlinVersion') ? project.kotlinVersion : '1.9.25'
+}
+
+apply plugin: 'com.android.library'
+apply plugin: 'org.jetbrains.kotlin.android'
+
+def reactNativeArchitectures() {
+  def value = rootProject.getProperties().get("reactNativeArchitectures")
+  return value ? value.split(",") : ["armeabi-v7a", "x86", "x86_64", "arm64-v8a"]
+}
+
+def nitroModulesDir = rootProject.file("node_modules/react-native-nitro-modules")
+
+android {
+  namespace 'com.nitrosync'
+  compileSdkVersion rootProject.ext.has('compileSdkVersion') ? rootProject.ext.compileSdkVersion : 34
+
+  defaultConfig {
+    minSdkVersion rootProject.ext.has('minSdkVersion') ? rootProject.ext.minSdkVersion : 24
+    externalNativeBuild {
+      cmake {
+        cppFlags "-std=c++20 -fexceptions -frtti"
+        arguments "-DANDROID_STL=c++_shared", "-DNITRO_MODULES_DIR=${nitroModulesDir.absolutePath}"
+        abiFilters (*reactNativeArchitectures())
+      }
+    }
+  }
+
+  externalNativeBuild {
+    cmake {
+      path "CMakeLists.txt"
+    }
+  }
+}
+
+dependencies {
+  implementation "androidx.work:work-runtime-ktx:2.9.1"
+  def nitroProject = findProject(':react-native-nitro-modules')
+  if (nitroProject != null) {
+    implementation nitroProject
+  }
+}

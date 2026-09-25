@@ -1,0 +1,52 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build outputs & caches
+dist/
+lib/
+build/
+*.tsbuildinfo
+.turbo
+.expo/
+
+# C++ & Native Build Artifacts
+*.o
+*.a
+*.dylib
+*.so
+.cxx/
+android/.gradle/
+android/app/build/
+android/build/
+ios/Pods/
+ios/build/
+ios/*.xcworkspace/xcuserdata/
+ios/*.xcodeproj/xcuserdata/
+*.xcworkspace/
+*.xcuserdata/
+DerivedData/
+
+# Example app artifacts
+example/node_modules/
+example/ios/Pods/
+example/ios/Podfile.lock
+example/ios/build/
+example/ios/DerivedData/
+example/android/.gradle/
+example/android/app/build/
+example/android/build/
+example/.expo/
+
+# Environment & Logs
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.DS_Store
+Thumbs.db

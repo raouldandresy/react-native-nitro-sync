@@ -1,0 +1,111 @@
+{
+  "name": "react-native-nitro-sync",
+  "version": "0.1.0",
+  "description": "Local-first e offline-first synchronization engine for React Native with synchronous Nitro Modules, SQLite persistence, optimistic mutations, and backend-agnostic transport.",
+  "license": "MIT",
+  "main": "lib/commonjs/index.js",
+  "module": "lib/module/index.js",
+  "types": "lib/typescript/src/index.d.ts",
+  "react-native": "src/index.ts",
+  "files": [
+    "src",
+    "cpp",
+    "android",
+    "ios",
+    "plugin",
+    "lib",
+    "app.plugin.js",
+    "NitroSync.podspec",
+    "LICENSE",
+    "README.md",
+    "SECURITY.md"
+  ],
+  "sideEffects": false,
+  "keywords": [
+    "react-native",
+    "react-native-nitro-modules",
+    "offline-first",
+    "local-first",
+    "sync",
+    "sqlite",
+    "expo"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-org/react-native-nitro-sync.git"
+  },
+  "bugs": {
+    "url": "https://github.com/your-org/react-native-nitro-sync/issues"
+  },
+  "homepage": "https://github.com/your-org/react-native-nitro-sync#readme",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "bob build",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . --ext .ts,.tsx",
+    "test": "jest",
+    "prepare": "bob build",
+    "release": "release-it"
+  },
+  "react-native-builder-bob": {
+    "source": "src",
+    "output": "lib",
+    "targets": ["commonjs", "module", "typescript"]
+  },
+  "peerDependencies": {
+    "@expo/config-plugins": ">=8",
+    "@op-engineering/op-sqlite": ">=10",
+    "react": ">=18",
+    "react-native": ">=0.73",
+    "react-native-mmkv": ">=2",
+    "react-native-nitro-modules": ">=0.25"
+  },
+  "peerDependenciesMeta": {
+    "@expo/config-plugins": {
+      "optional": true
+    },
+    "@op-engineering/op-sqlite": {
+      "optional": true
+    },
+    "react-native-mmkv": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@babel/core": "^7.26.0",
+    "@expo/config-plugins": "^57.0.9",
+    "@types/jest": "^29.5.14",
+    "@types/react": "^18.3.12",
+    "@types/react-native": "^0.73.0",
+    "eslint": "^9.17.0",
+    "jest": "^29.7.0",
+    "react": "^18.3.1",
+    "react-native": "^0.76.5",
+    "react-native-builder-bob": "^0.40.12",
+    "react-native-nitro-modules": "^0.25.2",
+    "typescript": "^5.7.2"
+  },
+  "codegenConfig": {
+    "name": "NitroSyncSpec",
+    "type": "modules",
+    "jsSrcsDir": "src/specs",
+    "android": {
+      "javaPackageName": "com.nitrosync"
+    }
+  },
+  "nitroModules": {
+    "src": "src/specs",
+    "modules": [
+      "NitroSync"
+    ]
+  },
+  "react-native-directory": {
+    "newArchitecture": true,
+    "expo": true,
+    "fabric": true,
+    "turboModules": true,
+    "nitroModules": true
+  }
+}
