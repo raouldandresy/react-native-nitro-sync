@@ -32,12 +32,12 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/your-org/react-native-nitro-sync.git"
+    "url": "git+https://github.com/raouldandresy/react-native-nitro-sync.git"
   },
   "bugs": {
-    "url": "https://github.com/your-org/react-native-nitro-sync/issues"
+    "url": "https://github.com/raouldandresy/react-native-nitro-sync/issues"
   },
-  "homepage": "https://github.com/your-org/react-native-nitro-sync#readme",
+  "homepage": "https://github.com/raouldandresy/react-native-nitro-sync#readme",
   "engines": {
     "node": ">=18"
   },
