@@ -1,7 +1,7 @@
 # react-native-nitro-sync
 
 [![npm version](https://img.shields.io/npm/v/react-native-nitro-sync)](https://www.npmjs.com/package/react-native-nitro-sync)
-[![CI](https://github.com/your-org/react-native-nitro-sync/actions/workflows/ci.yml/badge.svg)](https://github.com/your-org/react-native-nitro-sync/actions)
+[![CI](https://github.com/raouldandresy/react-native-nitro-sync/actions/workflows/ci.yml/badge.svg)](https://github.com/raouldandresy/react-native-nitro-sync/actions)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
 Local-first and offline-first synchronization for React Native. The package keeps optimistic mutations in a SQLite queue, exposes synchronous Nitro Module primitives, and lets applications bring their own REST, GraphQL, or WebSocket transport.
