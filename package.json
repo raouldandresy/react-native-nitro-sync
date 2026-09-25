@@ -52,7 +52,11 @@
   "react-native-builder-bob": {
     "source": "src",
     "output": "lib",
-    "targets": ["commonjs", "module", "typescript"]
+    "targets": [
+      "commonjs",
+      "module",
+      "typescript"
+    ]
   },
   "peerDependencies": {
     "@expo/config-plugins": ">=8",
@@ -85,6 +89,7 @@
     "react-native": "^0.76.5",
     "react-native-builder-bob": "^0.40.12",
     "react-native-nitro-modules": "^0.25.2",
+    "release-it": "^20.2.1",
     "typescript": "^5.7.2"
   },
   "codegenConfig": {
