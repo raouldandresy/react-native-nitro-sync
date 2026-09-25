@@ -85,7 +85,7 @@
     "react-native": "^0.76.5",
     "react-native-builder-bob": "^0.40.12",
     "react-native-nitro-modules": "^0.25.2",
-    "typescript": "^5.7.2"
+    "typescript": "^7.0.2"
   },
   "codegenConfig": {
     "name": "NitroSyncSpec",
