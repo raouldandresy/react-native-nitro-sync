@@ -11,7 +11,7 @@
   "dependencies": {
     "@op-engineering/op-sqlite": "^18.2.5",
     "expo": "~52.0.0",
-    "expo-asset": "~11.0.5",
+    "expo-asset": "~57.0.18",
     "expo-linking": "~7.0.5",
     "expo-router": "~4.0.0",
     "query-string": "^9.5.1",
