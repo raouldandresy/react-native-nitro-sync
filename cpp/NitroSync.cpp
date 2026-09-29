@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <stdexcept>
 
 namespace nitrosync {
@@ -39,6 +40,28 @@ const char* operationName(MutationOperation operation) {
 
 }  // namespace
 
+std::string resolveDatabasePath(const std::string& name) {
+  if (name.find('/') != std::string::npos) {
+    // Caller supplied an explicit path; respect it as-is.
+    return name;
+  }
+#if defined(__APPLE__)
+  // iOS/tvOS sandboxes always set HOME to the app's container root, with a
+  // "Documents" subdirectory guaranteed to exist and be writable. Resolving
+  // through HOME avoids depending on Foundation/Objective-C from this
+  // platform-agnostic translation unit.
+  const char* home = std::getenv("HOME");
+  const std::string base = home != nullptr ? std::string(home) + "/Documents" : ".";
+  return base + "/" + name;
+#else
+  // Android has no writable-directory environment variable equivalent to
+  // iOS's HOME; the app-private files directory must come from the Java
+  // Context (see Context#getFilesDir()). Until that plumbing exists, fall
+  // back to the given relative name, matching the previous behavior.
+  return name;
+#endif
+}
+
 NitroSync::NitroSync() : HybridObject("NitroSync") {}
 
 void NitroSync::loadHybridMethods() {
@@ -61,7 +84,7 @@ void NitroSync::loadHybridMethods() {
 }
 
 void NitroSync::initialize(const std::string& databasePath) {
-  queue_ = std::make_unique<MutationQueue>(databasePath);
+  queue_ = std::make_unique<MutationQueue>(resolveDatabasePath(databasePath));
   queue_->initialize();
 }
 

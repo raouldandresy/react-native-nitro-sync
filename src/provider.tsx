@@ -118,10 +118,19 @@ export function NitroSyncProvider({ config, children }: NitroSyncProviderProps):
     return createSyncStorage(config.sqliteDatabase, config.metadataStore);
   }, [config.metadataStore, config.sqliteDatabase, config.storage]);
 
-  useEffect(() => {
+  // Schema/engine initialization must complete before any child renders, because
+  // React fires child `useEffect`s (e.g. `useSyncCollection`'s `ensureTable`) before
+  // this provider's own effects on mount. Running it inside `useMemo` guarantees it
+  // executes synchronously during render, ahead of any child querying the database.
+  // Both calls are idempotent (`CREATE TABLE IF NOT EXISTS`, re-opening the same
+  // native connection), so re-running them if dependencies change is safe.
+  useMemo(() => {
     const nativeEngine = config.nativeEngine ?? getNitroSync();
     nativeEngine?.initialize(config.databaseName ?? 'nitro-sync.db');
     storage?.initialize();
+  }, [config.databaseName, config.nativeEngine, storage]);
+
+  useEffect(() => {
     const storedLastSyncedAt = storage?.getLastSyncedAt() ?? readSyncLastSyncedAt(config.metadataStore);
     setLastSyncedAt(storedLastSyncedAt);
     const storedDeviceId = storage?.getDeviceId() ?? readSyncDeviceId(config.metadataStore);

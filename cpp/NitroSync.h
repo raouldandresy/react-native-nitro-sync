@@ -11,6 +11,12 @@
 
 namespace nitrosync {
 
+// Resolves a bare database filename (e.g. "nitro-sync.db") into an absolute,
+// writable path inside the app's sandbox. If `name` already contains a path
+// separator, it is returned unchanged so callers can opt into an explicit
+// location. See NitroSync.cpp for the platform-specific implementation.
+std::string resolveDatabasePath(const std::string& name);
+
 class NitroSync final : public margelo::nitro::HybridObject {
  public:
   NitroSync();
