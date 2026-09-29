@@ -49,10 +49,14 @@ void NitroSync::loadHybridMethods() {
     prototype.registerHybridMethod("listPendingMutations", &NitroSync::listPendingMutations);
     prototype.registerHybridMethod("markMutationSyncing", &NitroSync::markMutationSyncing);
     prototype.registerHybridMethod("markMutationFailed", &NitroSync::markMutationFailed);
+    prototype.registerHybridMethod("markMutationRejected", &NitroSync::markMutationRejected);
     prototype.registerHybridMethod("markMutationPending", &NitroSync::markMutationPending);
     prototype.registerHybridMethod("removeMutation", &NitroSync::removeMutation);
     prototype.registerHybridMethod("upsertRecord", &NitroSync::upsertRecord);
+    prototype.registerHybridMethod("deleteRecord", &NitroSync::deleteRecord);
     prototype.registerHybridMethod("readRecords", &NitroSync::readRecords);
+    prototype.registerHybridMethod("readTombstones", &NitroSync::readTombstones);
+    prototype.registerHybridMethod("clearTombstone", &NitroSync::clearTombstone);
   });
 }
 
@@ -66,8 +70,17 @@ MutationQueue& NitroSync::queue() {
   return *queue_;
 }
 
-void NitroSync::enqueueMutation(const std::string& id, const std::string& tableName, const std::string& operation, const std::string& payload, double timestamp) {
-  queue().enqueue({id, tableName, parseOperation(operation), payload, static_cast<std::int64_t>(timestamp), MutationStatus::Pending, 0});
+void NitroSync::enqueueMutation(const std::string& id, const std::string& tableName, const std::string& operation, const std::string& payload, double timestamp, double schemaVersion) {
+  queue().enqueue({
+      id,
+      tableName,
+      parseOperation(operation),
+      payload,
+      static_cast<std::int64_t>(timestamp),
+      static_cast<std::int32_t>(schemaVersion),
+      MutationStatus::Pending,
+      0,
+  });
 }
 
 std::vector<std::string> NitroSync::listPendingMutations(double limit) {
@@ -78,17 +91,31 @@ std::vector<std::string> NitroSync::listPendingMutations(double limit) {
                          ",\"tableName\":" + quoteJson(mutation.tableName) +
                          ",\"operation\":" + quoteJson(operationName(mutation.operation)) +
                          ",\"payload\":" + quoteJson(mutation.payload) +
-                         ",\"timestamp\":" + std::to_string(mutation.timestamp) + "}");
+                         ",\"timestamp\":" + std::to_string(mutation.timestamp) +
+                         ",\"schemaVersion\":" + std::to_string(mutation.schemaVersion) + "}");
   }
   return serialized;
 }
 
 void NitroSync::markMutationSyncing(const std::string& id) { queue().markSyncing(id); }
 void NitroSync::markMutationFailed(const std::string& id) { queue().markFailed(id); }
+void NitroSync::markMutationRejected(const std::string& id) { queue().markRejected(id); }
 void NitroSync::markMutationPending(const std::string& id) { queue().markPending(id); }
 void NitroSync::removeMutation(const std::string& id) { queue().remove(id); }
 void NitroSync::upsertRecord(const std::string& tableName, const std::string& recordId, const std::string& payload, double timestamp) { queue().upsertRecord(tableName, recordId, payload, static_cast<std::int64_t>(timestamp)); }
+void NitroSync::deleteRecord(const std::string& tableName, const std::string& recordId, double timestamp) { queue().deleteRecord(tableName, recordId, static_cast<std::int64_t>(timestamp)); }
 std::vector<std::string> NitroSync::readRecords(const std::string& tableName) { return queue().readRecords(tableName); }
+std::vector<std::string> NitroSync::readTombstones(const std::string& tableName) {
+  std::vector<std::string> serialized;
+  for (const Tombstone& tombstone : queue().readTombstones(tableName)) {
+    serialized.push_back("{\"id\":" + quoteJson(tombstone.recordId) +
+                         ",\"timestamp\":" + std::to_string(tombstone.timestamp) + "}");
+  }
+  return serialized;
+}
+void NitroSync::clearTombstone(const std::string& tableName, const std::string& recordId, double throughTimestamp) {
+  queue().clearTombstone(tableName, recordId, static_cast<std::int64_t>(throughTimestamp));
+}
 
 namespace {
 const bool registered = [] {

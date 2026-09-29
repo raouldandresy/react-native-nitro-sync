@@ -1,6 +1,7 @@
 -- Local persistence schema for the mutation queue.
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
+PRAGMA busy_timeout = 5000;
 
 CREATE TABLE IF NOT EXISTS sync_queue (
   id TEXT PRIMARY KEY NOT NULL,
@@ -8,8 +9,9 @@ CREATE TABLE IF NOT EXISTS sync_queue (
   operation TEXT NOT NULL CHECK (operation IN ('CREATE', 'UPDATE', 'DELETE')),
   payload TEXT NOT NULL CHECK (json_valid(payload)),
   timestamp INTEGER NOT NULL,
-  status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'SYNCING', 'FAILED')),
-  retry_count INTEGER NOT NULL DEFAULT 0
+  status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'SYNCING', 'FAILED', 'REJECTED')),
+  retry_count INTEGER NOT NULL DEFAULT 0,
+  schema_version INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE INDEX IF NOT EXISTS sync_queue_status_timestamp
@@ -23,3 +25,6 @@ CREATE TABLE IF NOT EXISTS sync_records (
   deleted INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (table_name, record_id)
 );
+
+CREATE INDEX IF NOT EXISTS sync_records_deleted_updated_at
+  ON sync_records(table_name, deleted, updated_at);

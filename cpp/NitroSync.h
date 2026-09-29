@@ -16,14 +16,18 @@ class NitroSync final : public margelo::nitro::HybridObject {
   NitroSync();
 
   void initialize(const std::string& databasePath);
-  void enqueueMutation(const std::string& id, const std::string& tableName, const std::string& operation, const std::string& payload, double timestamp);
+  void enqueueMutation(const std::string& id, const std::string& tableName, const std::string& operation, const std::string& payload, double timestamp, double schemaVersion);
   std::vector<std::string> listPendingMutations(double limit);
   void markMutationSyncing(const std::string& id);
   void markMutationFailed(const std::string& id);
+  void markMutationRejected(const std::string& id);
   void markMutationPending(const std::string& id);
   void removeMutation(const std::string& id);
   void upsertRecord(const std::string& tableName, const std::string& recordId, const std::string& payload, double timestamp);
+  void deleteRecord(const std::string& tableName, const std::string& recordId, double timestamp);
   std::vector<std::string> readRecords(const std::string& tableName);
+  std::vector<std::string> readTombstones(const std::string& tableName);
+  void clearTombstone(const std::string& tableName, const std::string& recordId, double throughTimestamp);
 
  protected:
   void loadHybridMethods() override;

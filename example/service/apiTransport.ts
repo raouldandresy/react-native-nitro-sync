@@ -1,51 +1,41 @@
-// example/apiTransport.ts
-import type { JsonObject, SyncMutation, SyncRecord, SyncTransport } from 'react-native-nitro-sync';
+import {
+  buildSyncRequestPayload,
+  normalizeSyncResponse,
+  type SyncMutation,
+  type SyncRecord,
+  type SyncTransport,
+} from 'react-native-nitro-sync';
 
-const API_BASE_URL = 'https://jsonplaceholder.typicode.com';
+const endpoint = process.env.EXPO_PUBLIC_NITRO_SYNC_ENDPOINT;
 
 export const apiTransport: SyncTransport = {
   async pushAndPull<T extends SyncRecord>(
     tableName: string,
     mutations: readonly SyncMutation<T>[],
-    lastSyncedAt: number | null
+    lastSyncedAt: number | null,
+    serverCursor?: string | null,
+    serverVersion?: number | null,
+    deviceId?: string,
   ) {
-    let acknowledgedMutationIds: string[] = [];
-
-    // 1. Invio delle mutazioni pendenti al server (PUSH)
-    if (mutations.length > 0) {
-      try {
-        const pushResponse = await fetch(`${API_BASE_URL}/${tableName}/sync-mutations`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ mutations, lastSyncedAt }),
-        });
-
-        if (pushResponse.ok) {
-          const pushResult = (await pushResponse.json()) as { acknowledgedIds?: string[] };
-          acknowledgedMutationIds = pushResult.acknowledgedIds ?? mutations.map((m) => m.id);
-        }
-      } catch (error) {
-        console.warn('[Sync Transport] Fallimento invio mutazioni, retry al prossimo ciclo:', error);
-      }
+    if (endpoint === undefined || endpoint.length === 0) {
+      throw new Error('Set EXPO_PUBLIC_NITRO_SYNC_ENDPOINT to your sync protocol endpoint');
     }
 
-    // 2. Recupero dei record aggiornati dal server (PULL)
-    const pullResponse = await fetch(`${API_BASE_URL}/${tableName}?_limit=10`);
-    if (!pullResponse.ok) {
-      throw new Error(`Errore durante il recupero dei dati da ${tableName}: ${pullResponse.statusText}`);
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(buildSyncRequestPayload(
+        tableName,
+        mutations,
+        lastSyncedAt,
+        serverCursor,
+        serverVersion,
+        deviceId,
+      )),
+    });
+    if (!response.ok) {
+      throw new Error(`Sync endpoint failed with HTTP ${response.status}`);
     }
-
-    const serverRecords = (await pullResponse.json()) as Array<Record<string, unknown>>;
-
-    // Cast esplicito a T[] per rispettare il vincolo generico <T extends SyncRecord>
-    const records: T[] = serverRecords.map((item) => ({
-      id: String(item.id),
-      text: String(item.title ?? item.text ?? ''),
-    })) as unknown as T[];
-
-    return {
-      records,
-      acknowledgedMutationIds,
-    };
+    return normalizeSyncResponse<T>(await response.json());
   },
 };

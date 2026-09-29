@@ -1,4 +1,5 @@
-import type { JsonObject, SyncMutation, SyncRecord } from './types';
+import { createSyncId, parseSerializedRecord } from './merge';
+import type { JsonObject, SyncMutation, SyncRecord, SyncTombstone } from './types';
 
 export type SqliteValue = string | number | null;
 
@@ -20,13 +21,23 @@ export interface SyncMetadataStore {
 export interface SyncStorage {
   readonly initialize: () => void;
   readonly loadRecords: (tableName: string) => readonly SyncRecord[];
+  readonly loadTombstones: (tableName: string) => readonly SyncTombstone[];
+  readonly clearTombstone: (tableName: string, recordId: string, throughTimestamp: number) => void;
   readonly saveMutation: (mutation: SyncMutation<SyncRecord>) => void;
   readonly listPendingMutations: (limit: number) => readonly SyncMutation<SyncRecord>[];
+  readonly markMutationFailed: (id: string) => void;
+  readonly markMutationRejected: (id: string) => void;
+  readonly markMutationPending: (id: string) => void;
+  readonly recoverStuckMutations: () => void;
   readonly removeMutation: (id: string) => void;
   readonly saveRecord: (tableName: string, record: SyncRecord, timestamp: number) => void;
   readonly removeRecord: (tableName: string, recordId: string, timestamp: number) => void;
   readonly getLastSyncedAt: () => number | null;
   readonly setLastSyncedAt: (timestamp: number) => void;
+  readonly getServerCursor: (tableName: string) => string | null;
+  readonly setServerCursor: (tableName: string, cursor: string | null) => void;
+  readonly getServerVersion: (tableName: string) => number | null;
+  readonly setServerVersion: (tableName: string, version: number | null) => void;
   readonly getDeviceId: () => string | null;
   readonly setDeviceId: (deviceId: string) => void;
 }
@@ -34,13 +45,14 @@ export interface SyncStorage {
 const QUEUE_SCHEMA = [
   'PRAGMA journal_mode = WAL',
   'PRAGMA foreign_keys = ON',
+  'PRAGMA busy_timeout = 5000',
   `CREATE TABLE IF NOT EXISTS sync_queue (
     id TEXT PRIMARY KEY NOT NULL,
     table_name TEXT NOT NULL,
     operation TEXT NOT NULL CHECK (operation IN ('CREATE', 'UPDATE', 'DELETE')),
     payload TEXT NOT NULL CHECK (json_valid(payload)),
     timestamp INTEGER NOT NULL,
-    status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'SYNCING', 'FAILED')),
+    status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'SYNCING', 'FAILED', 'REJECTED')),
     retry_count INTEGER NOT NULL DEFAULT 0
   )`,
   'CREATE INDEX IF NOT EXISTS sync_queue_status_timestamp ON sync_queue(status, timestamp)',
@@ -56,6 +68,56 @@ const QUEUE_SCHEMA = [
 
 const LAST_SYNCED_AT_KEY = 'nitro_sync.last_synced_at';
 const DEVICE_ID_KEY = 'nitro_sync.device_id';
+const SERVER_CURSOR_KEY = 'nitro_sync.server_cursor.';
+const SERVER_VERSION_KEY = 'nitro_sync.server_version.';
+const CURRENT_SCHEMA_VERSION = 4;
+
+export function readSyncLastSyncedAt(metadataStore?: SyncMetadataStore): number | null {
+  const value = metadataStore?.getString(LAST_SYNCED_AT_KEY);
+  if (value === undefined || value.length === 0) return null;
+  const timestamp = Number(value);
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+export function writeSyncLastSyncedAt(metadataStore: SyncMetadataStore | undefined, timestamp: number): void {
+  metadataStore?.set(LAST_SYNCED_AT_KEY, String(timestamp));
+}
+
+export function readSyncDeviceId(metadataStore?: SyncMetadataStore): string | null {
+  return metadataStore?.getString(DEVICE_ID_KEY) ?? null;
+}
+
+export function writeSyncDeviceId(metadataStore: SyncMetadataStore | undefined, deviceId: string): void {
+  metadataStore?.set(DEVICE_ID_KEY, deviceId);
+}
+
+export function readSyncServerCursor(metadataStore: SyncMetadataStore | undefined, tableName: string): string | null {
+  const value = metadataStore?.getString(`${SERVER_CURSOR_KEY}${encodeURIComponent(tableName)}`);
+  return value === undefined || value.length === 0 ? null : value;
+}
+
+export function writeSyncServerCursor(
+  metadataStore: SyncMetadataStore | undefined,
+  tableName: string,
+  cursor: string | null,
+): void {
+  metadataStore?.set(`${SERVER_CURSOR_KEY}${encodeURIComponent(tableName)}`, cursor ?? '');
+}
+
+export function readSyncServerVersion(metadataStore: SyncMetadataStore | undefined, tableName: string): number | null {
+  const value = metadataStore?.getString(`${SERVER_VERSION_KEY}${encodeURIComponent(tableName)}`);
+  if (value === undefined || value.length === 0) return null;
+  const version = Number(value);
+  return Number.isFinite(version) ? version : null;
+}
+
+export function writeSyncServerVersion(
+  metadataStore: SyncMetadataStore | undefined,
+  tableName: string,
+  version: number | null,
+): void {
+  metadataStore?.set(`${SERVER_VERSION_KEY}${encodeURIComponent(tableName)}`, version === null ? '' : String(version));
+}
 
 function rowsFrom(result: SqliteResult): readonly JsonObject[] {
   return result.rows ?? [];
@@ -64,10 +126,7 @@ function rowsFrom(result: SqliteResult): readonly JsonObject[] {
 function toRecord(row: JsonObject): SyncRecord | null {
   const payload = row.payload;
   if (typeof payload !== 'string') return null;
-  const parsed: unknown = JSON.parse(payload);
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
-  const record = parsed as Record<string, unknown>;
-  return typeof record.id === 'string' ? record as SyncRecord : null;
+  return parseSerializedRecord(payload);
 }
 
 export function createSyncStorage(
@@ -77,24 +136,102 @@ export function createSyncStorage(
   return {
     initialize: () => {
       for (const statement of QUEUE_SCHEMA) database.executeSync(statement);
+      const versionRow = rowsFrom(database.executeSync('PRAGMA user_version'))[0];
+      const storedVersion = typeof versionRow?.user_version === 'number'
+        ? versionRow.user_version
+        : 0;
+      if (storedVersion > CURRENT_SCHEMA_VERSION) {
+        throw new Error(
+          `Database schema version ${storedVersion} is newer than supported version ${CURRENT_SCHEMA_VERSION}`,
+        );
+      }
+      if (storedVersion < 1) {
+        database.executeSync('PRAGMA user_version = 1');
+      }
+      if (storedVersion < 2) {
+        database.executeSync(
+          'CREATE INDEX IF NOT EXISTS sync_records_deleted_updated_at ON sync_records(table_name, deleted, updated_at)',
+        );
+        database.executeSync('PRAGMA user_version = 2');
+      }
+      if (storedVersion < 3) {
+        database.executeSync('BEGIN IMMEDIATE TRANSACTION');
+        try {
+          database.executeSync('DROP INDEX IF EXISTS sync_queue_status_timestamp');
+          database.executeSync(`CREATE TABLE sync_queue_v3 (
+            id TEXT PRIMARY KEY NOT NULL,
+            table_name TEXT NOT NULL,
+            operation TEXT NOT NULL CHECK (operation IN ('CREATE', 'UPDATE', 'DELETE')),
+            payload TEXT NOT NULL CHECK (json_valid(payload)),
+            timestamp INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'SYNCING', 'FAILED', 'REJECTED')),
+            retry_count INTEGER NOT NULL DEFAULT 0
+          )`);
+          database.executeSync(`INSERT INTO sync_queue_v3
+            (id, table_name, operation, payload, timestamp, status, retry_count)
+            SELECT id, table_name, operation, payload, timestamp, status, retry_count FROM sync_queue`);
+          database.executeSync('DROP TABLE sync_queue');
+          database.executeSync('ALTER TABLE sync_queue_v3 RENAME TO sync_queue');
+          database.executeSync('CREATE INDEX sync_queue_status_timestamp ON sync_queue(status, timestamp)');
+          database.executeSync('PRAGMA user_version = 3');
+          database.executeSync('COMMIT');
+        } catch (error) {
+          database.executeSync('ROLLBACK');
+          throw error;
+        }
+      }
+      if (storedVersion < 4) {
+        database.executeSync('BEGIN IMMEDIATE TRANSACTION');
+        try {
+          database.executeSync(
+            'ALTER TABLE sync_queue ADD COLUMN schema_version INTEGER NOT NULL DEFAULT 1',
+          );
+          database.executeSync('PRAGMA user_version = 4');
+          database.executeSync('COMMIT');
+        } catch (error) {
+          database.executeSync('ROLLBACK');
+          throw error;
+        }
+      }
+      database.executeSync("UPDATE sync_queue SET status = 'PENDING' WHERE status = 'SYNCING'");
     },
     loadRecords: (tableName) => rowsFrom(database.executeSync(
       'SELECT payload FROM sync_records WHERE table_name = ? AND deleted = 0 ORDER BY updated_at ASC',
       [tableName],
     )).map(toRecord).filter((record): record is SyncRecord => record !== null),
+    loadTombstones: (tableName) => rowsFrom(database.executeSync(
+      'SELECT record_id, updated_at FROM sync_records WHERE table_name = ? AND deleted = 1 ORDER BY updated_at ASC',
+      [tableName],
+    )).filter((row): row is JsonObject & { record_id: string; updated_at: number } => (
+      typeof row.record_id === 'string' && typeof row.updated_at === 'number'
+    )).map((row) => ({ id: row.record_id, timestamp: row.updated_at })),
+    clearTombstone: (tableName, recordId, throughTimestamp) => {
+      database.executeSync(
+        'DELETE FROM sync_records WHERE table_name = ? AND record_id = ? AND deleted = 1 AND updated_at <= ?',
+        [tableName, recordId, throughTimestamp],
+      );
+    },
     saveMutation: (mutation) => {
       database.executeSync(
-        `INSERT OR REPLACE INTO sync_queue
-          (id, table_name, operation, payload, timestamp, status, retry_count)
-          VALUES (?, ?, ?, ?, ?, 'PENDING', 0)`,
-        [mutation.id, mutation.tableName, mutation.operation, JSON.stringify(mutation.payload), mutation.timestamp],
+        `INSERT INTO sync_queue
+          (id, table_name, operation, payload, timestamp, status, retry_count, schema_version)
+          VALUES (?, ?, ?, ?, ?, 'PENDING', 0, ?)
+          ON CONFLICT(id) DO NOTHING`,
+        [
+          mutation.id,
+          mutation.tableName,
+          mutation.operation,
+          JSON.stringify(mutation.payload),
+          mutation.timestamp,
+          mutation.schemaVersion ?? 1,
+        ],
       );
     },
     listPendingMutations: (limit) => {
       database.executeSync('BEGIN IMMEDIATE TRANSACTION');
       try {
         const rows = rowsFrom(database.executeSync(
-          `SELECT id, table_name, operation, payload, timestamp
+          `SELECT id, table_name, operation, payload, timestamp, schema_version
            FROM sync_queue WHERE status IN ('PENDING', 'FAILED')
            ORDER BY timestamp ASC LIMIT ?`,
           [limit],
@@ -109,6 +246,7 @@ export function createSyncStorage(
             operation: row.operation,
             payload,
             timestamp: row.timestamp,
+            schemaVersion: typeof row.schema_version === 'number' ? row.schema_version : 1,
           };
         }).filter((mutation): mutation is SyncMutation<SyncRecord> => mutation !== null);
         for (const mutation of mutations) {
@@ -120,6 +258,21 @@ export function createSyncStorage(
         database.executeSync('ROLLBACK');
         throw error;
       }
+    },
+    markMutationFailed: (id) => {
+      database.executeSync(
+        "UPDATE sync_queue SET status = 'FAILED', retry_count = retry_count + 1 WHERE id = ?",
+        [id],
+      );
+    },
+    markMutationRejected: (id) => {
+      database.executeSync("UPDATE sync_queue SET status = 'REJECTED' WHERE id = ?", [id]);
+    },
+    markMutationPending: (id) => {
+      database.executeSync("UPDATE sync_queue SET status = 'PENDING' WHERE id = ?", [id]);
+    },
+    recoverStuckMutations: () => {
+      database.executeSync("UPDATE sync_queue SET status = 'PENDING' WHERE status = 'SYNCING'");
     },
     removeMutation: (id) => {
       database.executeSync('DELETE FROM sync_queue WHERE id = ?', [id]);
@@ -145,15 +298,18 @@ export function createSyncStorage(
       );
     },
     getLastSyncedAt: () => {
-      const value = metadataStore?.getString(LAST_SYNCED_AT_KEY);
-      return value === undefined ? null : Number(value);
+      return readSyncLastSyncedAt(metadataStore);
     },
-    setLastSyncedAt: (timestamp) => metadataStore?.set(LAST_SYNCED_AT_KEY, String(timestamp)),
-    getDeviceId: () => metadataStore?.getString(DEVICE_ID_KEY) ?? null,
-    setDeviceId: (deviceId) => metadataStore?.set(DEVICE_ID_KEY, deviceId),
+    setLastSyncedAt: (timestamp) => writeSyncLastSyncedAt(metadataStore, timestamp),
+    getServerCursor: (tableName) => readSyncServerCursor(metadataStore, tableName),
+    setServerCursor: (tableName, cursor) => writeSyncServerCursor(metadataStore, tableName, cursor),
+    getServerVersion: (tableName) => readSyncServerVersion(metadataStore, tableName),
+    setServerVersion: (tableName, version) => writeSyncServerVersion(metadataStore, tableName, version),
+    getDeviceId: () => readSyncDeviceId(metadataStore),
+    setDeviceId: (deviceId) => writeSyncDeviceId(metadataStore, deviceId),
   };
 }
 
 export function createDeviceId(): string {
-  return `nitro-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  return createSyncId();
 }

@@ -6,12 +6,23 @@ updates:
       interval: weekly
     open-pull-requests-limit: 5
     ignore:
-      # Previene major breaking updates su Nitro Modules e tooling di build
+      # react-native-nitro-modules e react-native-builder-bob sono ancora in
+      # versione 0.x: per semver un bump "minor" (0.25 -> 0.37) NON viene
+      # classificato come "semver-major" (il major resta 0), quindi va
+      # ignorato esplicitamente anche il minor per ottenere lo stesso effetto
+      # di protezione da breaking change che si avrebbe su un pacchetto >=1.0.
       - dependency-name: "react-native-nitro-modules"
-        update-types: ["version-update:semver-major"]
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
       - dependency-name: "react-native-builder-bob"
-        update-types: ["version-update:semver-major"]
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
       - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+      # react-native@0.76.x dichiara un peerDependency @types/react ^18.2.6:
+      # un major bump di react/@types/react a 19.x rompe `npm ci` (ERESOLVE)
+      # finché react-native non aggiorna il proprio peer range.
+      - dependency-name: "react"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@types/react"
         update-types: ["version-update:semver-major"]
 
   - package-ecosystem: npm
@@ -27,3 +38,12 @@ updates:
         update-types: ["version-update:semver-major"]
       - dependency-name: "react"
         update-types: ["version-update:semver-major"]
+      # react-native-mmkv e react-native-nitro-modules sono dipendenze
+      # native strettamente accoppiate alla versione usata nella libreria
+      # principale: un major bump può introdurre API incompatibili con il
+      # codice demo (vedi example/app/_layout.tsx) senza che la CI se ne
+      # accorga (l'esempio non è coperto dal workflow CI).
+      - dependency-name: "react-native-mmkv"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react-native-nitro-modules"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]

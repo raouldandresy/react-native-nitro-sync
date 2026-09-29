@@ -11,18 +11,46 @@ export interface SyncRecord extends JsonObject {
   readonly id: string;
 }
 
+export interface SyncTombstone {
+  readonly id: string;
+  readonly timestamp: number;
+}
+
+export interface SyncMutationRejection {
+  readonly mutationId: string;
+  readonly code: string;
+  readonly message?: string;
+  readonly retryable?: boolean;
+}
+
 export interface SyncMutation<T extends JsonObject = JsonObject> {
   readonly id: string;
   readonly tableName: string;
   readonly operation: 'CREATE' | 'UPDATE' | 'DELETE';
   readonly payload: T;
   readonly timestamp: number;
+  readonly schemaVersion?: number;
 }
 
 export interface SyncTransportResponse<T extends SyncRecord = SyncRecord> {
+  readonly protocolVersion?: number;
   readonly records?: readonly T[];
+  readonly tombstones?: readonly SyncTombstone[];
   readonly acknowledgedMutationIds?: readonly string[];
+  readonly rejectedMutations?: readonly SyncMutationRejection[];
   readonly serverTimestamp?: number;
+  readonly serverCursor?: string | null;
+  readonly serverVersion?: number | null;
+}
+
+export interface SyncTransportRequest {
+  readonly protocolVersion: number;
+  readonly tableName: string;
+  readonly mutations: readonly SyncMutation[];
+  readonly deviceId?: string;
+  readonly lastSyncedAt: number | null;
+  readonly serverCursor?: string | null;
+  readonly serverVersion?: number | null;
 }
 
 export interface SyncTransport {
@@ -30,8 +58,28 @@ export interface SyncTransport {
     tableName: string,
     mutations: readonly SyncMutation<T>[],
     lastSyncedAt: number | null,
+    serverCursor?: string | null,
+    serverVersion?: number | null,
+    deviceId?: string,
   ): Promise<SyncTransportResponse<T>>;
 }
+
+export type SyncConflictStrategy = 'lww' | 'last-write-wins' | 'server-wins' | 'client-wins' | 'merge-fields';
+export type SyncConflictResolver<T extends SyncRecord = SyncRecord> = (
+  local: T,
+  remote: T,
+  mutation?: SyncMutation<T>,
+) => T;
+
+export type SyncMutationStatus = 'PENDING' | 'SYNCING' | 'FAILED' | 'REJECTED' | 'ACKED';
+export type SyncMutationEvent =
+  | 'ENQUEUED'
+  | 'CLAIMED'
+  | 'ACKED'
+  | 'REJECTED'
+  | 'RETRY'
+  | 'FAILED'
+  | 'RECOVERED';
 
 export interface NitroSyncConfig {
   readonly databaseName?: string;
@@ -44,7 +92,8 @@ export interface NitroSyncConfig {
   readonly sqliteDatabase?: SyncSqliteDatabase;
   readonly metadataStore?: SyncMetadataStore;
   readonly deviceId?: string;
-  readonly conflictStrategy?: 'lww';
+  readonly conflictStrategy?: SyncConflictStrategy | SyncConflictResolver;
+  readonly schemaVersions?: Readonly<Record<string, number>>;
 }
 
 export type SyncStatus = 'idle' | 'syncing' | 'error';

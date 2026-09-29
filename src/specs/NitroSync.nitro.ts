@@ -1,7 +1,7 @@
 import type { HybridObject } from 'react-native-nitro-modules';
 
 export type MutationOperation = 'CREATE' | 'UPDATE' | 'DELETE';
-export type MutationStatus = 'PENDING' | 'SYNCING' | 'FAILED';
+export type MutationStatus = 'PENDING' | 'SYNCING' | 'FAILED' | 'REJECTED';
 
 export interface NativeMutation {
   readonly id: string;
@@ -9,6 +9,7 @@ export interface NativeMutation {
   readonly operation: MutationOperation;
   readonly payload: string;
   readonly timestamp: number;
+  readonly schemaVersion: number;
   readonly status: MutationStatus;
   readonly retryCount: number;
 }
@@ -21,12 +22,17 @@ export interface NitroSync extends HybridObject<{ ios: 'c++'; android: 'c++' }> 
     operation: MutationOperation,
     payload: string,
     timestamp: number,
+    schemaVersion: number,
   ): void;
   listPendingMutations(limit: number): string[];
   markMutationSyncing(id: string): void;
   markMutationFailed(id: string): void;
+  markMutationRejected(id: string): void;
   markMutationPending(id: string): void;
   removeMutation(id: string): void;
   upsertRecord(tableName: string, recordId: string, payload: string, timestamp: number): void;
+  deleteRecord(tableName: string, recordId: string, timestamp: number): void;
   readRecords(tableName: string): string[];
+  readTombstones(tableName: string): string[];
+  clearTombstone(tableName: string, recordId: string, throughTimestamp: number): void;
 }
