@@ -21,7 +21,6 @@
     },
     "android": {
       "package": "com.example.nitrosync"
-    },
-    "newArchEnabled": true
+    }
   }
 }
