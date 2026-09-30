@@ -82,7 +82,7 @@
     "@expo/config-plugins": "^57.0.9",
     "@types/jest": "^30.0.0",
     "@types/react": "^19.2.3",
-    "eslint": "^9.17.0",
+    "eslint": "^10.11.0",
     "jest": "^30.5.2",
     "react": "^19.2.3",
     "react-native": "^0.87.1",
