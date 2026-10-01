@@ -14,8 +14,7 @@ CREATE TABLE IF NOT EXISTS sync_queue (
   schema_version INTEGER NOT NULL DEFAULT 1,
   next_retry_at INTEGER NOT NULL DEFAULT 0,
   rejection_code TEXT,
-  rejection_message TEXT,
-  schema_version INTEGER NOT NULL DEFAULT 1
+  rejection_message TEXT
 );
 
 CREATE INDEX IF NOT EXISTS sync_queue_status_timestamp
