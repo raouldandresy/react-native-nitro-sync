@@ -33,6 +33,8 @@ target_compile_options(NitroSync PRIVATE
   -fstack-protector-all
 )
 
+target_link_options(NitroSync PRIVATE "-Wl,-z,max-page-size=16384")
+
 target_link_libraries(NitroSync
   react-native-nitro-modules::NitroModules
   log

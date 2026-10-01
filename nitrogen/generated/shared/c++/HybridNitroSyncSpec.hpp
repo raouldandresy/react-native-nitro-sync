@@ -52,12 +52,17 @@ namespace margelo::nitro::nitrosync {
     public:
       // Methods
       virtual void initialize(const std::string& databasePath) = 0;
+      virtual void applyMutation(const std::string& id, const std::string& tableName, MutationOperation operation, const std::string& payload, double timestamp, double schemaVersion, const std::string& recordId, const std::string& recordPayload, bool deleted) = 0;
       virtual void enqueueMutation(const std::string& id, const std::string& tableName, MutationOperation operation, const std::string& payload, double timestamp, double schemaVersion) = 0;
       virtual std::vector<std::string> listPendingMutations(double limit) = 0;
+      virtual std::vector<std::string> listPendingMutationsForTable(const std::string& tableName, double limit) = 0;
+      virtual std::vector<std::string> listRejectedMutations(const std::string& tableName) = 0;
       virtual void markMutationSyncing(const std::string& id) = 0;
       virtual void markMutationFailed(const std::string& id) = 0;
-      virtual void markMutationRejected(const std::string& id) = 0;
+      virtual void markMutationRejected(const std::string& id, const std::string& code, const std::string& message) = 0;
       virtual void markMutationPending(const std::string& id) = 0;
+      virtual void retryRejectedMutation(const std::string& id) = 0;
+      virtual void discardRejectedMutation(const std::string& id) = 0;
       virtual void removeMutation(const std::string& id) = 0;
       virtual void upsertRecord(const std::string& tableName, const std::string& recordId, const std::string& payload, double timestamp) = 0;
       virtual void deleteRecord(const std::string& tableName, const std::string& recordId, double timestamp) = 0;

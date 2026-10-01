@@ -19,6 +19,7 @@
     "NitroSync.podspec",
     "LICENSE",
     "README.md",
+    "architecture.md",
     "SECURITY.md"
   ],
   "sideEffects": false,
@@ -48,6 +49,9 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint src plugin/src example/app example/components example/service example/testTransport.ts",
     "test": "jest",
+    "test:sync-contract": "jest --runTestsByPath tools/sync-contract.test.cjs",
+    "benchmark:sync-backend": "node tools/sync-benchmark.cjs",
+    "sync:test-server": "node tools/sync-test-server.cjs",
     "prepare": "nitrogen && bob build",
     "release": "release-it"
   },

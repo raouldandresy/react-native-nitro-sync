@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -39,12 +40,20 @@ class MutationQueue {
   MutationQueue& operator=(const MutationQueue&) = delete;
 
   void initialize();
+  void applyMutation(
+      const Mutation& mutation,
+      const std::string& recordId,
+      const std::string& recordPayload,
+      bool deleted);
   void enqueue(const Mutation& mutation);
-  std::vector<Mutation> claimPending(std::size_t limit);
+  std::vector<Mutation> claimPending(std::size_t limit, const std::optional<std::string>& tableName = std::nullopt);
+  std::vector<std::string> listRejected(const std::string& tableName) const;
   void markSyncing(const std::string& id);
   void markFailed(const std::string& id);
-  void markRejected(const std::string& id);
+  void markRejected(const std::string& id, const std::string& code, const std::string& message);
   void markPending(const std::string& id);
+  void retryRejected(const std::string& id);
+  void discardRejected(const std::string& id);
   void remove(const std::string& id);
   void upsertRecord(const std::string& tableName, const std::string& recordId, const std::string& payload, std::int64_t timestamp);
   void deleteRecord(const std::string& tableName, const std::string& recordId, std::int64_t timestamp);

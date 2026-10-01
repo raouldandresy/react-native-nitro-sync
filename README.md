@@ -6,12 +6,16 @@
 
 Local-first and offline-first synchronization primitives for React Native. The client persists records and queued mutations locally, exposes synchronous Nitro Module queue operations, and lets the host application provide its own REST, GraphQL, or WebSocket transport.
 
-> **Maturity: early development — not yet production-ready as a general-purpose sync solution.** The client implementation and example are useful for evaluation and integration work, but the package does not ship a backend, guarantee distributed consistency, or provide a validated production background-sync service. See [Production readiness](#production-readiness).
+> **Production boundary:** this package is a client-side sync library, not a backend or a complete application sync service. Its package-level validation is separate from an integrating app's backend, authentication, deployment, and background-execution guarantees. See [Production readiness](#production-readiness).
+
+For component responsibilities, persistence, native registration, and outstanding readiness gaps, see [Architecture](./architecture.md).
 
 ## Features in this version
 
 - Optimistic collection operations via `useSyncCollection`: insert, update, delete, and manual refresh.
 - Durable local mutation queue with deduplication, retry/recovery, and per-mutation schema version.
+- Atomic local queue/record writes, table-filtered claims, and capped exponential retry delay.
+- Inspect and retry or discard permanently rejected mutations with their stored server code/message.
 - Nitro C++ queue plus a TypeScript/OP-SQLite storage adapter and MMKV-compatible metadata storage.
 - Versioned client/server request and response contract (`protocolVersion: 1`), per-table cursors, acknowledgements, and permanent/retryable rejections.
 - Configurable record merge strategies and persisted delete tombstones.
@@ -22,6 +26,7 @@ Local-first and offline-first synchronization primitives for React Native. The c
 
 - React Native 0.73+ with the New Architecture enabled.
 - iOS 13.4+ or Android API 24+.
+- The example Android build targets `arm64-v8a` and `x86_64` so its native dependencies can be validated for 16 KB memory pages; 32-bit example ABIs are intentionally excluded.
 - `react-native-nitro-modules` 0.36.5+.
 - `@op-engineering/op-sqlite` 10+ is required to build the Android Nitro C++ queue, which compiles the SQLite amalgamation shipped by this package; it is also the default provider for the TypeScript storage adapter, though another provider can be used there.
 - `react-native-mmkv` for persistent sync metadata in the standard setup.
@@ -156,6 +161,16 @@ export function TodoList() {
         />
       ))}
       <Button title="Sync now" onPress={() => void todos.refresh()} />
+      {todos.rejectedMutations.map(({ mutation, code, message }) => (
+        <Button
+          key={mutation.id}
+          title={`Rejected (${code}): ${message}`}
+          onPress={() => {
+            todos.retryRejected(mutation.id);
+            void todos.refresh();
+          }}
+        />
+      ))}
     </>
   );
 }
@@ -248,7 +263,7 @@ These diagrams show the intended client flow, not a guarantee of exactly-once ne
 
 ## Storage, conflicts, and deletes
 
-The native SQLite queue schema is in [`schema.sql`](schema.sql); the C++ implementation is in [`cpp/MutationQueue.cpp`](cpp/MutationQueue.cpp). The exported `createSyncStorage(database, metadata)` creates the OP-SQLite adapter. Both queue implementations deduplicate by mutation ID without replacing the original mutation payload. Queue migrations use `user_version` through version 4 and preserve existing queued work. A mutation left `SYNCING` is recovered at initialization.
+The native SQLite queue schema is in [`schema.sql`](schema.sql); the C++ implementation is in [`cpp/MutationQueue.cpp`](cpp/MutationQueue.cpp). The exported `createSyncStorage(database, metadata)` creates the OP-SQLite adapter. Both queue implementations deduplicate by mutation ID without replacing the original mutation payload. Queue migrations use `user_version` through version 5 and preserve existing queued work. A mutation left `SYNCING` is recovered at initialization. Local mutations and their materialized records/tombstones are written in a single transaction. Failed mutations use an exponential retry delay capped at five minutes. Permanent rejections can be inspected through `rejectedMutations`, then retried or discarded using `retryRejected(id)` / `discardRejected(id)`. Discarding stops future delivery but does not roll back the optimistic record; reconcile that local record explicitly if required.
 
 Structured records, queue state, and tombstones belong in durable SQLite storage. The metadata store (for example MMKV) holds device ID, `lastSyncedAt`, and per-table cursors/versions. Avoid using metadata storage as the source of truth for records.
 
@@ -283,19 +298,33 @@ The demo transport is in-memory and resets when the process exits. It is for lea
 
 ## Production readiness
 
-**Is this library production-ready today? It should be treated as early-stage and not yet production-validated.** It provides client-side sync building blocks rather than an end-to-end service. Whether it is production-suitable depends on the host app's integration, release validation, and backend contract.
+**Library-level validation:** the package's test suite, protocol fixture tests, package build, Android Release bundle, Android 16 KB runtime check, and iOS Release simulator build/runtime check have been completed. These validate the library and its native integration in the example; they are distinct from validating any particular consumer application's backend or deployment.
 
-The backend is deliberately not bundled: applications choose and operate their own backend and transport. Its absence from this repository is an architectural boundary, not by itself a production-readiness defect. The repository has unit coverage for protocol validation, storage, merge policies, lifecycle settlement, and the benchmark helper. The library build, type checks, lint, Jest suite, and Android example build have been exercised locally; these checks do **not** amount to production certification. No representative physical-device benchmark results or iOS release-device validation are available from this environment. Background delivery is not guaranteed.
+The backend is deliberately not bundled: applications choose and operate their own backend and transport. Its absence is an architectural boundary, not a package-level readiness defect. The repository has unit coverage for protocol validation, storage, merge policies, lifecycle settlement, and the benchmark helper, plus a local Node HTTP protocol fixture with nine contract tests. The example was connected to that fixture from an Android 16 KB emulator and successfully sent two local notes through `POST /sync`, then read them back from the backend snapshot API. The Android Release AAB and iOS Release simulator app have both built locally; both were also exercised in simulators.
 
-Before relying on it in a production application, validate the complete app/backend integration. In particular:
+The following are **consumer-application integration responsibilities**, not prerequisites for validating this library package:
 
-1. Contract-test the chosen backend's atomic mutation-ID deduplication, per-table cursor consistency, rejection semantics, schema evolution, authentication, and delete/conflict behavior.
-2. Run end-to-end tests covering concurrent edits/deletes, duplicate delivery, lost ACKs, partial responses, pagination/cursor gaps, upgrades, and restart recovery across multiple devices.
-3. Build and exercise release configurations on supported iOS and Android versions, including the host app's background delegates and database lifecycle.
-4. Measure queue size, latency, memory, and battery impact on representative devices and workloads; define operational limits and observability.
-5. Review error recovery, permanent rejection UX, backup/restore behavior, privacy/security requirements, and the package's compatibility/support policy.
+1. Contract-test the application's selected backend, including atomic mutation-ID deduplication, cursor consistency, rejection semantics, authentication, and delete/conflict behavior.
+2. Exercise the complete app/backend workflow, including concurrent edits, lost acknowledgements, upgrades, and recovery across devices.
+3. Integrate the application's credentials, data lifecycle, error/rejection UX, and any background execution handler.
+4. Measure performance on representative hardware when the application needs device-specific latency, memory, or battery guarantees.
 
-Treat the API and protocol as subject to change until those validations and a stable release policy are in place. Do not rely on the sample in-memory server or operating-system background scheduling for data durability or delivery guarantees.
+The Android native library requests 16 KB ELF segment alignment. The example targets 64-bit ABIs only, and CI builds its APK and checks every packaged shared library's ELF load segments and ZIP alignment. The Release AAB has also been built with the standard lint tasks enabled and validated: all 52 native libraries across `arm64-v8a` and `x86_64` have 16 KB ELF load-segment alignment. The release app was installed and exercised on a 16 KB-page Android emulator; a locally saved note remained after restarting the app. The example AAB uses the debug signing key and is not suitable for publication. CI also builds the iOS example in Release configuration for the simulator. Signed device releases and physical-device testing are required only when validating a consumer app's release/deployment claims.
+
+### Protocol and performance checks
+
+The repository includes a loopback-only Node.js backend for exercising protocol version 1 without choosing a production backend. It keeps per-table records and cursors in memory, deduplicates mutation IDs, returns tombstones and rejections, and supports deterministic lost-ACK/rejection test headers. It is a test fixture, not a deployable or secure production service.
+
+Run the HTTP contract tests and backend throughput benchmark with Node.js 18 or newer:
+
+```sh
+npm run test:sync-contract -- --runInBand --watchman=false
+npm run benchmark:sync-backend
+```
+
+The benchmark reports p50/p95 HTTP round-trip latency and mutations per second for configurable batch sizes, JSON payload sizes, and concurrency. For a different workload, set `SYNC_BENCH_BATCHES`, `SYNC_BENCH_PAYLOADS`, `SYNC_BENCH_CONCURRENCY`, and `SYNC_BENCH_ITERATIONS` to comma-separated positive integers (iterations must be at least 2). A Node 22/Apple Silicon run with 30 iterations per worker measured about 88k mutations/s for 100 × 256-byte mutations at concurrency 1 (HTTP p50 0.93 ms / p95 1.55 ms) and 102k mutations/s at concurrency 4 (p50 3.36 ms / p95 5.73 ms); these characterize only the test fixture. The native SQLite/Nitro queue benchmark was also run in the Android 16 KB emulator development build: medians for 10/50/100 mutations were 6.63/28.89/51.42 ms enqueue and 1.34/2.29/3.72 ms claim. These measurements exercise the bounded benchmark path; use them as environment-specific observations, not universal performance guarantees. The on-device benchmark uses batches up to 100 mutations (the provider's current sync batch limit), yields periodically to keep the UI responsive, and displays completed batch results incrementally. It covers queue insertion/claiming and JS event-loop delay; it does not measure memory, battery, full network sync, or enforce universal performance thresholds.
+
+The sample in-memory server is only a protocol fixture, and operating-system background scheduling does not guarantee delivery. Applications must supply their own durable backend and foreground/resume recovery policy. See [Architecture](./architecture.md) for implementation details and boundaries.
 
 ## Development
 

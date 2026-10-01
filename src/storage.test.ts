@@ -11,9 +11,13 @@ function createMemoryMetadataStore(): SyncMetadataStore {
   };
 }
 
-function createMemoryDatabase(initialUserVersion = 0): SyncSqliteDatabase & { readonly getUserVersion: () => number } {
+function createMemoryDatabase(initialUserVersion = 0): SyncSqliteDatabase & {
+  readonly getUserVersion: () => number;
+  readonly advanceTime: (milliseconds: number) => void;
+} {
   const tables = new Map<string, Array<Record<string, unknown>>>();
   let userVersion = initialUserVersion;
+  let nowMs = 1_000_000;
 
   const ensureTable = (name: string) => {
     if (!tables.has(name)) {
@@ -34,6 +38,9 @@ function createMemoryDatabase(initialUserVersion = 0): SyncSqliteDatabase & { re
 
   return {
     getUserVersion: () => userVersion,
+    advanceTime: (milliseconds) => {
+      nowMs += milliseconds;
+    },
     executeSync: (sql: string, params: readonly (string | number | null)[] = []) => {
       const normalized = sql.trim();
       if (normalized === 'PRAGMA user_version') {
@@ -71,6 +78,15 @@ function createMemoryDatabase(initialUserVersion = 0): SyncSqliteDatabase & { re
         }
         return { rows: [] };
       }
+      if (normalized.startsWith('ALTER TABLE sync_queue ADD COLUMN')) {
+        const columnName = normalized.match(/ADD COLUMN (\w+)/)?.[1];
+        if (columnName !== undefined) {
+          for (const row of tables.get('sync_queue') ?? []) {
+            row[columnName] = columnName === 'next_retry_at' ? 0 : null;
+          }
+        }
+        return { rows: [] };
+      }
       if (normalized.startsWith('INSERT INTO sync_queue_v3')) {
         ensureTable('sync_queue_v3');
         tables.set('sync_queue_v3', [...(tables.get('sync_queue') ?? [])]);
@@ -94,6 +110,9 @@ function createMemoryDatabase(initialUserVersion = 0): SyncSqliteDatabase & { re
             status: 'PENDING',
             retry_count: 0,
             schema_version: schemaVersion,
+            next_retry_at: 0,
+            rejection_code: null,
+            rejection_message: null,
           });
         }
         return { rows: [] };
@@ -122,10 +141,30 @@ function createMemoryDatabase(initialUserVersion = 0): SyncSqliteDatabase & { re
       if (normalized.startsWith('SELECT')) {
         const rows = tables.get(normalized.includes('sync_records') ? 'sync_records' : 'sync_queue') ?? [];
         if (normalized.includes('FROM sync_queue')) {
+          if (normalized.includes("status = 'REJECTED'")) {
+            const tableName = String(params[0] ?? '');
+            return { rows: rows
+              .filter((row) => row.status === 'REJECTED' && row.table_name === tableName)
+              .map((row) => ({
+                id: row.id,
+                table_name: row.table_name,
+                operation: row.operation,
+                payload: row.payload,
+                timestamp: row.timestamp,
+                schema_version: row.schema_version ?? 1,
+                rejection_code: row.rejection_code,
+                rejection_message: row.rejection_message,
+              })) };
+          }
+          const scoped = normalized.includes('AND table_name = ?');
+          const tableName = scoped ? String(params[0] ?? '') : undefined;
+          const limit = Number(params[scoped ? 1 : 0] ?? 100);
           const selected = rows.filter((row) => {
             const status = String(row.status ?? '');
-            return status === 'PENDING' || status === 'FAILED';
-          }).slice(0, Number(params[0] ?? 100));
+            return (status === 'PENDING' || status === 'FAILED') &&
+              Number(row.next_retry_at ?? 0) <= nowMs &&
+              (tableName === undefined || row.table_name === tableName);
+          }).slice(0, limit);
           return { rows: selected.map((row) => ({
             id: row.id,
             table_name: row.table_name,
@@ -162,20 +201,37 @@ function createMemoryDatabase(initialUserVersion = 0): SyncSqliteDatabase & { re
         }
         return { rows: [] };
       }
-      if (normalized.startsWith("UPDATE sync_queue SET status = 'FAILED'")) {
+      if (normalized.includes("SET status = 'FAILED'")) {
         updateQueueRow(String(params[0]), (row) => ({
           ...row,
           status: 'FAILED',
+          next_retry_at: nowMs + Math.min(1000 * (2 ** Number(row.retry_count ?? 0)), 300_000),
           retry_count: Number(row.retry_count ?? 0) + 1,
         }));
         return { rows: [] };
       }
       if (normalized.startsWith("UPDATE sync_queue SET status = 'REJECTED'")) {
-        updateQueueRow(String(params[0]), (row) => ({ ...row, status: 'REJECTED' }));
+        updateQueueRow(String(params[2]), (row) => ({
+          ...row,
+          status: 'REJECTED',
+          rejection_code: params[0],
+          rejection_message: params[1],
+        }));
         return { rows: [] };
       }
-      if (normalized.startsWith("UPDATE sync_queue SET status = 'PENDING' WHERE id = ?")) {
-        updateQueueRow(String(params[0]), (row) => ({ ...row, status: 'PENDING' }));
+      if (normalized.startsWith("UPDATE sync_queue SET status = 'PENDING', retry_count = 0")) {
+        updateQueueRow(String(params[0]), (row) => ({
+          ...row,
+          status: 'PENDING',
+          retry_count: 0,
+          next_retry_at: 0,
+          rejection_code: null,
+          rejection_message: null,
+        }));
+        return { rows: [] };
+      }
+      if (normalized.startsWith("UPDATE sync_queue SET status = 'PENDING'")) {
+        updateQueueRow(String(params[0]), (row) => ({ ...row, status: 'PENDING', next_retry_at: 0 }));
         return { rows: [] };
       }
       if (normalized.startsWith('DELETE FROM sync_queue WHERE id = ?')) {
@@ -222,6 +278,8 @@ describe('createSyncStorage idempotent mutation recovery', () => {
     expect(firstAttempt[0].schemaVersion).toBe(1);
 
     storage.markMutationFailed('mutation-1');
+    expect(storage.listPendingMutations(10)).toHaveLength(0);
+    database.advanceTime(1_000);
     const retried = storage.listPendingMutations(10);
     expect(retried).toHaveLength(1);
     expect(retried[0].id).toBe(firstAttempt[0].id);
@@ -257,11 +315,11 @@ describe('createSyncStorage idempotent mutation recovery', () => {
   it('runs the pending schema migration from version 1 and rejects a future schema version', () => {
     const olderDatabase = createMemoryDatabase(1);
     createSyncStorage(olderDatabase).initialize();
-    expect(olderDatabase.getUserVersion()).toBe(4);
+    expect(olderDatabase.getUserVersion()).toBe(5);
 
-    const newerDatabase = createMemoryDatabase(5);
+    const newerDatabase = createMemoryDatabase(6);
     expect(() => createSyncStorage(newerDatabase).initialize())
-      .toThrow('newer than supported version 4');
+      .toThrow('newer than supported version 5');
   });
 
   it('migrates an existing queue row without losing retry state or payload', () => {
@@ -308,12 +366,96 @@ describe('createSyncStorage idempotent mutation recovery', () => {
       timestamp: 400,
     });
     storage.listPendingMutations(10);
-    storage.markMutationRejected('rejected-1');
+    storage.markMutationRejected('rejected-1', 'invalid', 'not allowed');
 
     expect(storage.listPendingMutations(10)).toEqual([]);
+    expect(storage.listRejectedMutations('todos')).toEqual([{
+      mutation: {
+        id: 'rejected-1',
+        tableName: 'todos',
+        operation: 'CREATE',
+        payload: { id: 'todo-3' },
+        timestamp: 400,
+        schemaVersion: 1,
+      },
+      code: 'invalid',
+      message: 'not allowed',
+    }]);
 
+    storage.retryRejectedMutation('rejected-1');
     storage.markMutationPending('rejected-1');
     expect(storage.listPendingMutations(10)).toHaveLength(1);
+  });
+
+  it('applies a local mutation and its materialized record in one SQLite transaction', () => {
+    const database = createMemoryDatabase();
+    const storage = createSyncStorage(database);
+    storage.initialize();
+    const mutation = {
+      id: 'atomic-1',
+      tableName: 'todos',
+      operation: 'CREATE' as const,
+      payload: { id: 'todo-atomic', title: 'atomic' },
+      timestamp: 450,
+    };
+
+    storage.applyMutation(mutation, mutation.payload, false);
+
+    expect(storage.listPendingMutations(10)).toEqual([{
+      ...mutation,
+      schemaVersion: 1,
+    }]);
+    expect(storage.loadRecords('todos')).toEqual([mutation.payload]);
+  });
+
+  it('claims a requested table directly without claiming older rows from other tables', () => {
+    const storage = createSyncStorage(createMemoryDatabase());
+    storage.initialize();
+    storage.saveMutation({
+      id: 'older-notes',
+      tableName: 'notes',
+      operation: 'CREATE',
+      payload: { id: 'note-1' },
+      timestamp: 1,
+    });
+    storage.saveMutation({
+      id: 'target-todo',
+      tableName: 'todos',
+      operation: 'CREATE',
+      payload: { id: 'todo-1' },
+      timestamp: 2,
+    });
+
+    expect(storage.listPendingMutations(1, 'todos').map(({ id }) => id)).toEqual(['target-todo']);
+    expect(storage.listPendingMutations(10, 'notes').map(({ id }) => id)).toEqual(['older-notes']);
+  });
+
+  it('caps repeated exponential retry delay at five minutes', () => {
+    const database = createMemoryDatabase();
+    const storage = createSyncStorage(database);
+    storage.initialize();
+    storage.saveMutation({
+      id: 'backoff-cap',
+      tableName: 'todos',
+      operation: 'CREATE',
+      payload: { id: 'todo-backoff' },
+      timestamp: 3,
+    });
+
+    let delay = 1_000;
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      expect(storage.listPendingMutations(1)).toHaveLength(1);
+      storage.markMutationFailed('backoff-cap');
+      database.advanceTime(delay);
+      delay = Math.min(delay * 2, 300_000);
+    }
+
+    expect(storage.listPendingMutations(1)).toHaveLength(1);
+    storage.markMutationFailed('backoff-cap');
+    database.advanceTime(299_999);
+    expect(storage.listPendingMutations(1)).toHaveLength(0);
+    database.advanceTime(1);
+    expect(storage.listPendingMutations(1)).toHaveLength(1);
   });
 });
 

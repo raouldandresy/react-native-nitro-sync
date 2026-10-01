@@ -8,7 +8,7 @@ import {
 } from 'react-native-nitro-sync';
 import { Card, colors, Intro, ScreenShell } from '../components/ui';
 
-const BATCH_SIZES = [10, 100, 1_000, 10_000] as const;
+const BATCH_SIZES = [10, 50, 100] as const;
 const RUNS = 3;
 
 export default function BenchmarkScreen(): React.JSX.Element {
@@ -22,12 +22,16 @@ export default function BenchmarkScreen(): React.JSX.Element {
     try {
       const engine = NitroModules.createHybridObject<NitroSync>('NitroSync');
       engine.initialize('nitro-sync-benchmark.db');
-      const rounds: SyncQueueBenchmarkResult[][] = [];
-      for (let iteration = 0; iteration < RUNS; iteration += 1) {
-        rounds.push([...(await benchmarkNativeSyncQueue(engine, BATCH_SIZES))]);
-      }
-      const medians = BATCH_SIZES.map((mutationCount, index) => {
-        const samples = rounds.map((round) => round[index]);
+      const medians: SyncQueueBenchmarkResult[] = [];
+      for (const mutationCount of BATCH_SIZES) {
+        const samples: SyncQueueBenchmarkResult[] = [];
+        for (let iteration = 0; iteration < RUNS; iteration += 1) {
+          const [sample] = await benchmarkNativeSyncQueue(engine, [mutationCount]);
+          if (sample === undefined) {
+            throw new Error(`Missing benchmark result for batch size ${mutationCount}`);
+          }
+          samples.push(sample);
+        }
         const median = (select: (sample: SyncQueueBenchmarkResult) => number): number => {
           const sorted = samples.map(select).sort((left, right) => left - right);
           return sorted[Math.floor(sorted.length / 2)] ?? 0;
@@ -36,7 +40,7 @@ export default function BenchmarkScreen(): React.JSX.Element {
         if (first === undefined) {
           throw new Error(`Missing benchmark result for batch size ${mutationCount}`);
         }
-        return {
+        const result = {
           ...first,
           serializedPayloadBytes: median((sample) => sample.serializedPayloadBytes),
           claimResponseBytes: median((sample) => sample.claimResponseBytes),
@@ -47,9 +51,10 @@ export default function BenchmarkScreen(): React.JSX.Element {
           claimMs: median((sample) => sample.claimMs),
           jsBlockingMs: median((sample) => sample.jsBlockingMs),
         };
-      });
+        medians.push(result);
+        setResults([...medians]);
+      }
       console.info('[NitroSyncBenchmark] median of 3 runs', JSON.stringify(medians));
-      setResults(medians);
       setStatus('done');
     } catch (caughtError) {
       const message = caughtError instanceof Error ? caughtError.message : String(caughtError);
@@ -67,7 +72,7 @@ export default function BenchmarkScreen(): React.JSX.Element {
       <Intro
         eyebrow={`Native queue · ${Platform.OS === 'android' ? 'Android' : 'iOS'}`}
         title="Benchmark"
-        detail={`Dedicated SQLite database · ${RUNS} runs per batch · median shown. Synthetic ${BATCH_SIZES.join(', ')}-mutation batches with 256-byte bodies.`}
+        detail={`Dedicated SQLite database · ${RUNS} runs per batch · median shown. Synthetic ${BATCH_SIZES.join(', ')}-mutation batches with 256-byte bodies. Results update after each batch.`}
       />
       <Card title="Interpretazione">
         <Text style={styles.body}>
@@ -79,7 +84,7 @@ export default function BenchmarkScreen(): React.JSX.Element {
       {status === 'running' && (
         <Card title="Benchmark in esecuzione">
           <ActivityIndicator color={colors.primary} />
-          <Text style={styles.body}>Il batch da 10.000 mutation può richiedere alcuni secondi.</Text>
+          <Text style={styles.body}>I batch vengono eseguiti in gruppi limitati per mantenere reattiva l'interfaccia.</Text>
         </Card>
       )}
       {error !== null && (

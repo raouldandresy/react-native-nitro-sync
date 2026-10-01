@@ -27,12 +27,17 @@ class NitroSync final : public HybridNitroSyncSpec {
   NitroSync() : HybridObject(TAG) {}
 
   void initialize(const std::string& databasePath) override;
+  void applyMutation(const std::string& id, const std::string& tableName, MutationOperation operation, const std::string& payload, double timestamp, double schemaVersion, const std::string& recordId, const std::string& recordPayload, bool deleted) override;
   void enqueueMutation(const std::string& id, const std::string& tableName, MutationOperation operation, const std::string& payload, double timestamp, double schemaVersion) override;
   std::vector<std::string> listPendingMutations(double limit) override;
+  std::vector<std::string> listPendingMutationsForTable(const std::string& tableName, double limit) override;
+  std::vector<std::string> listRejectedMutations(const std::string& tableName) override;
   void markMutationSyncing(const std::string& id) override;
   void markMutationFailed(const std::string& id) override;
-  void markMutationRejected(const std::string& id) override;
+  void markMutationRejected(const std::string& id, const std::string& code, const std::string& message) override;
   void markMutationPending(const std::string& id) override;
+  void retryRejectedMutation(const std::string& id) override;
+  void discardRejectedMutation(const std::string& id) override;
   void removeMutation(const std::string& id) override;
   void upsertRecord(const std::string& tableName, const std::string& recordId, const std::string& payload, double timestamp) override;
   void deleteRecord(const std::string& tableName, const std::string& recordId, double timestamp) override;

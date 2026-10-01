@@ -2,6 +2,7 @@ import { NitroModules } from 'react-native-nitro-modules';
 import type { NitroSync } from './specs/NitroSync.nitro';
 
 let engine: NitroSync | null = null;
+let creationError: unknown;
 
 export function getNitroSync(): NitroSync | null {
   if (engine !== null) {
@@ -10,9 +11,15 @@ export function getNitroSync(): NitroSync | null {
 
   try {
     engine = NitroModules.createHybridObject<NitroSync>('NitroSync');
-  } catch {
+  } catch (caughtError) {
+    creationError = caughtError;
     return null;
   }
 
+  creationError = null;
   return engine;
+}
+
+export function getNitroSyncCreationError(): unknown {
+  return creationError;
 }

@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS sync_records (
   PRIMARY KEY (table_name, record_id)
 );
 )SQL";
-constexpr int kCurrentSchemaVersion = 4;
+constexpr int kCurrentSchemaVersion = 5;
 
 void checkSqlite(int result, sqlite3* database, const char* context) {
   if (result != SQLITE_OK && result != SQLITE_DONE && result != SQLITE_ROW) {
@@ -170,6 +170,22 @@ void MutationQueue::initialize() {
         throw;
       }
     }
+    if (schemaVersion < 5) {
+      execute("BEGIN IMMEDIATE TRANSACTION;");
+      try {
+        execute("ALTER TABLE sync_queue ADD COLUMN next_retry_at INTEGER NOT NULL DEFAULT 0;");
+        execute("ALTER TABLE sync_queue ADD COLUMN rejection_code TEXT;");
+        execute("ALTER TABLE sync_queue ADD COLUMN rejection_message TEXT;");
+        execute("PRAGMA user_version = 5;");
+        execute("COMMIT;");
+      } catch (...) {
+        try {
+          execute("ROLLBACK;");
+        } catch (...) {
+        }
+        throw;
+      }
+    }
     recoverSyncing();
   } catch (...) {
     sqlite3_close_v2(database_);
@@ -208,16 +224,72 @@ void MutationQueue::enqueue(const Mutation& mutation) {
   checkSqlite(sqlite3_step(statement.get()), database_, "Enqueue mutation");
 }
 
-std::vector<Mutation> MutationQueue::claimPending(std::size_t limit) {
+void MutationQueue::applyMutation(
+    const Mutation& mutation,
+    const std::string& recordId,
+    const std::string& recordPayload,
+    bool deleted) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  execute("BEGIN IMMEDIATE TRANSACTION;");
+  try {
+    Statement enqueueStatement = prepare(
+        database_,
+        "INSERT INTO sync_queue (id, table_name, operation, payload, timestamp, status, retry_count, schema_version) "
+        "VALUES (?, ?, ?, ?, ?, 'PENDING', 0, ?) ON CONFLICT(id) DO NOTHING",
+        "Preparing mutation apply");
+    sqlite3_bind_text(enqueueStatement.get(), 1, mutation.id.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(enqueueStatement.get(), 2, mutation.tableName.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(enqueueStatement.get(), 3, operationToSql(mutation.operation), -1, SQLITE_STATIC);
+    sqlite3_bind_text(enqueueStatement.get(), 4, mutation.payload.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(enqueueStatement.get(), 5, mutation.timestamp);
+    sqlite3_bind_int(enqueueStatement.get(), 6, mutation.schemaVersion);
+    checkSqlite(sqlite3_step(enqueueStatement.get()), database_, "Enqueueing mutation");
+
+    const char* recordSql = deleted
+        ? "INSERT INTO sync_records(table_name, record_id, payload, updated_at, deleted) VALUES (?, ?, ?, ?, 1) "
+          "ON CONFLICT(table_name, record_id) DO UPDATE SET updated_at = excluded.updated_at, deleted = 1 "
+          "WHERE excluded.updated_at >= sync_records.updated_at"
+        : "INSERT INTO sync_records(table_name, record_id, payload, updated_at, deleted) VALUES (?, ?, ?, ?, 0) "
+          "ON CONFLICT(table_name, record_id) DO UPDATE SET payload = excluded.payload, "
+          "updated_at = excluded.updated_at, deleted = 0 WHERE excluded.updated_at >= sync_records.updated_at";
+    Statement recordStatement = prepare(database_, recordSql, "Preparing record apply");
+    sqlite3_bind_text(recordStatement.get(), 1, mutation.tableName.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(recordStatement.get(), 2, recordId.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(recordStatement.get(), 3, recordPayload.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(recordStatement.get(), 4, mutation.timestamp);
+    checkSqlite(sqlite3_step(recordStatement.get()), database_, "Persisting local record");
+    execute("COMMIT;");
+  } catch (...) {
+    try {
+      execute("ROLLBACK;");
+    } catch (...) {
+    }
+    throw;
+  }
+}
+
+std::vector<Mutation> MutationQueue::claimPending(
+    std::size_t limit,
+    const std::optional<std::string>& tableName) {
   std::lock_guard<std::mutex> lock(mutex_);
   std::vector<Mutation> mutations;
   execute("BEGIN IMMEDIATE TRANSACTION;");
   try {
-    const char* selectSql = "SELECT id, table_name, operation, payload, timestamp, schema_version, status, retry_count "
-                            "FROM sync_queue WHERE status IN ('PENDING', 'FAILED') "
-                            "ORDER BY timestamp ASC LIMIT ?";
+    const char* selectSql = tableName.has_value()
+        ? "SELECT id, table_name, operation, payload, timestamp, schema_version, status, retry_count "
+          "FROM sync_queue WHERE status IN ('PENDING', 'FAILED') "
+          "AND next_retry_at <= (strftime('%s', 'now') * 1000) AND table_name = ? "
+          "ORDER BY timestamp ASC LIMIT ?"
+        : "SELECT id, table_name, operation, payload, timestamp, schema_version, status, retry_count "
+          "FROM sync_queue WHERE status IN ('PENDING', 'FAILED') "
+          "AND next_retry_at <= (strftime('%s', 'now') * 1000) "
+          "ORDER BY timestamp ASC LIMIT ?";
     Statement statement = prepare(database_, selectSql, "Preparing claim");
-    sqlite3_bind_int64(statement.get(), 1, static_cast<sqlite3_int64>(limit));
+    const int limitIndex = tableName.has_value() ? 2 : 1;
+    if (tableName.has_value()) {
+      sqlite3_bind_text(statement.get(), 1, tableName->c_str(), -1, SQLITE_TRANSIENT);
+    }
+    sqlite3_bind_int64(statement.get(), limitIndex, static_cast<sqlite3_int64>(limit));
     while (true) {
       const int step = sqlite3_step(statement.get());
       if (step == SQLITE_DONE) {
@@ -257,24 +329,92 @@ std::vector<Mutation> MutationQueue::claimPending(std::size_t limit) {
   return mutations;
 }
 
+std::vector<std::string> MutationQueue::listRejected(const std::string& tableName) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  std::vector<std::string> rejected;
+  Statement statement = prepare(
+      database_,
+      "SELECT id, table_name, operation, payload, timestamp, schema_version, rejection_code, rejection_message "
+      "FROM sync_queue WHERE status = 'REJECTED' AND table_name = ? ORDER BY timestamp ASC",
+      "Preparing rejected mutation read");
+  sqlite3_bind_text(statement.get(), 1, tableName.c_str(), -1, SQLITE_TRANSIENT);
+  while (true) {
+    const int step = sqlite3_step(statement.get());
+    if (step == SQLITE_DONE) break;
+    if (step != SQLITE_ROW) {
+      checkSqlite(step, database_, "Reading rejected mutations");
+      break;
+    }
+    rejected.push_back(
+        "{\"id\":" + quoteJsonString(columnText(statement.get(), 0)) +
+        ",\"tableName\":" + quoteJsonString(columnText(statement.get(), 1)) +
+        ",\"operation\":" + quoteJsonString(columnText(statement.get(), 2)) +
+        ",\"payload\":" + quoteJsonString(columnText(statement.get(), 3)) +
+        ",\"timestamp\":" + std::to_string(sqlite3_column_int64(statement.get(), 4)) +
+        ",\"schemaVersion\":" + std::to_string(sqlite3_column_int(statement.get(), 5)) +
+        ",\"code\":" + quoteJsonString(columnText(statement.get(), 6)) +
+        ",\"message\":" + quoteJsonString(columnText(statement.get(), 7)) + "}");
+  }
+  return rejected;
+}
+
 void MutationQueue::updateStatus(const std::string& id, MutationStatus status, bool incrementRetry) {
   std::lock_guard<std::mutex> lock(mutex_);
   const char* sql = incrementRetry
-      ? "UPDATE sync_queue SET status = ?, retry_count = retry_count + 1 WHERE id = ?"
-      : "UPDATE sync_queue SET status = ? WHERE id = ?";
+      ? "UPDATE sync_queue SET status = ?, "
+        "next_retry_at = (strftime('%s', 'now') * 1000) + CASE retry_count "
+        "WHEN 0 THEN 1000 WHEN 1 THEN 2000 WHEN 2 THEN 4000 WHEN 3 THEN 8000 "
+        "WHEN 4 THEN 16000 WHEN 5 THEN 32000 WHEN 6 THEN 64000 WHEN 7 THEN 128000 "
+        "WHEN 8 THEN 256000 ELSE 300000 END, retry_count = retry_count + 1 WHERE id = ?"
+      : "UPDATE sync_queue SET status = ?, "
+        "next_retry_at = CASE WHEN ? = 'PENDING' THEN 0 ELSE next_retry_at END WHERE id = ?";
   Statement statement = prepare(database_, sql, "Preparing status update");
   const char* statusText = status == MutationStatus::Pending ? "PENDING"
       : status == MutationStatus::Syncing ? "SYNCING"
       : status == MutationStatus::Rejected ? "REJECTED" : "FAILED";
   sqlite3_bind_text(statement.get(), 1, statusText, -1, SQLITE_STATIC);
-  sqlite3_bind_text(statement.get(), 2, id.c_str(), -1, SQLITE_TRANSIENT);
+  if (incrementRetry) {
+    sqlite3_bind_text(statement.get(), 2, id.c_str(), -1, SQLITE_TRANSIENT);
+  } else {
+    sqlite3_bind_text(statement.get(), 2, statusText, -1, SQLITE_STATIC);
+    sqlite3_bind_text(statement.get(), 3, id.c_str(), -1, SQLITE_TRANSIENT);
+  }
   checkSqlite(sqlite3_step(statement.get()), database_, "Updating mutation status");
 }
 
 void MutationQueue::markSyncing(const std::string& id) { updateStatus(id, MutationStatus::Syncing, false); }
 void MutationQueue::markFailed(const std::string& id) { updateStatus(id, MutationStatus::Failed, true); }
-void MutationQueue::markRejected(const std::string& id) { updateStatus(id, MutationStatus::Rejected, false); }
+void MutationQueue::markRejected(const std::string& id, const std::string& code, const std::string& message) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  Statement statement = prepare(
+      database_,
+      "UPDATE sync_queue SET status = 'REJECTED', rejection_code = ?, rejection_message = ? WHERE id = ?",
+      "Preparing mutation rejection");
+  sqlite3_bind_text(statement.get(), 1, code.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(statement.get(), 2, message.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_text(statement.get(), 3, id.c_str(), -1, SQLITE_TRANSIENT);
+  checkSqlite(sqlite3_step(statement.get()), database_, "Marking mutation rejected");
+}
 void MutationQueue::markPending(const std::string& id) { updateStatus(id, MutationStatus::Pending, false); }
+void MutationQueue::retryRejected(const std::string& id) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  Statement statement = prepare(
+      database_,
+      "UPDATE sync_queue SET status = 'PENDING', retry_count = 0, next_retry_at = 0, "
+      "rejection_code = NULL, rejection_message = NULL WHERE id = ? AND status = 'REJECTED'",
+      "Preparing rejected mutation retry");
+  sqlite3_bind_text(statement.get(), 1, id.c_str(), -1, SQLITE_TRANSIENT);
+  checkSqlite(sqlite3_step(statement.get()), database_, "Retrying rejected mutation");
+}
+void MutationQueue::discardRejected(const std::string& id) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  Statement statement = prepare(
+      database_,
+      "DELETE FROM sync_queue WHERE id = ? AND status = 'REJECTED'",
+      "Preparing rejected mutation discard");
+  sqlite3_bind_text(statement.get(), 1, id.c_str(), -1, SQLITE_TRANSIENT);
+  checkSqlite(sqlite3_step(statement.get()), database_, "Discarding rejected mutation");
+}
 
 void MutationQueue::remove(const std::string& id) {
   std::lock_guard<std::mutex> lock(mutex_);

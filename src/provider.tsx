@@ -10,7 +10,7 @@ import {
   timestampOf,
 } from './merge';
 import { failSyncMutations, partitionSyncMutations, settleSyncMutations } from './mutationSettlement';
-import { getNitroSync } from './native';
+import { getNitroSync, getNitroSyncCreationError } from './native';
 import { buildSyncRequestPayload, normalizeSyncResponse } from './protocol';
 import {
   createDeviceId,
@@ -25,6 +25,7 @@ import {
   writeSyncServerVersion,
 } from './storage';
 import type { NitroSyncConfig, SyncMutation, SyncRecord, SyncStatus, SyncTransport } from './types';
+import type { RejectedSyncMutation } from './storage';
 
 export interface NitroSyncProviderProps {
   readonly config: NitroSyncConfig;
@@ -107,7 +108,6 @@ export function NitroSyncProvider({ config, children }: NitroSyncProviderProps):
   const serverCursorsRef = useRef(new Map<string, string | null>());
   const serverVersionsRef = useRef(new Map<string, number | null>());
   const deviceIdRef = useRef(config.deviceId ?? createDeviceId());
-  const fallbackMutationsRef = useRef<SyncMutation<SyncRecord>[]>([]);
   const syncChainRef = useRef(Promise.resolve());
   recordsRef.current = records;
   lastSyncedAtRef.current = lastSyncedAt;
@@ -126,6 +126,13 @@ export function NitroSyncProvider({ config, children }: NitroSyncProviderProps):
   // native connection), so re-running them if dependencies change is safe.
   useMemo(() => {
     const nativeEngine = config.nativeEngine ?? getNitroSync();
+    if (nativeEngine === null && storage === null) {
+      const nativeError = getNitroSyncCreationError();
+      const reason = nativeError instanceof Error ? ` Native module error: ${nativeError.message}` : '';
+      throw new Error(
+        `NitroSync native storage is unavailable.${reason} Configure a persistent SyncStorage adapter before rendering NitroSyncProvider.`,
+      );
+    }
     nativeEngine?.initialize(config.databaseName ?? 'nitro-sync.db');
     storage?.initialize();
   }, [config.databaseName, config.nativeEngine, storage]);
@@ -213,40 +220,25 @@ export function NitroSyncProvider({ config, children }: NitroSyncProviderProps):
           storage?.markMutationFailed(mutationId);
         }
       };
-      const markRejected = (mutationId: string): void => {
+      const markRejected = (mutationId: string, code: string, message: string): void => {
         if (usesNative) {
-          nativeEngine.markMutationRejected(mutationId);
+          nativeEngine.markMutationRejected(mutationId, code, message);
         } else {
-          storage?.markMutationRejected(mutationId);
-        }
-      };
-      const markPending = (mutationId: string): void => {
-        if (usesNative) {
-          nativeEngine.markMutationPending(mutationId);
-        } else {
-          storage?.markMutationPending(mutationId);
+          storage?.markMutationRejected(mutationId, code, message);
         }
       };
       try {
         if (usesNative) {
-          claimed = nativeEngine.listPendingMutations(100).map(parseSerializedMutation);
+          claimed = requestedTableName === undefined
+            ? nativeEngine.listPendingMutations(100).map(parseSerializedMutation)
+            : nativeEngine.listPendingMutationsForTable(requestedTableName, 100).map(parseSerializedMutation);
         } else if (storage !== null) {
-          claimed = [...storage.listPendingMutations(100)];
+          claimed = [...storage.listPendingMutations(100, requestedTableName)];
         } else {
-          claimed = [...fallbackMutationsRef.current];
+          throw new Error('No persistent NitroSync queue is available');
         }
         for (const mutation of claimed) {
           unackedIds.add(mutation.id);
-        }
-
-        if (requestedTableName !== undefined && (usesNative || storage !== null)) {
-          for (const mutation of claimed) {
-            if (mutation.tableName !== requestedTableName) {
-              markPending(mutation.id);
-              unackedIds.delete(mutation.id);
-            }
-          }
-          claimed = claimed.filter((mutation) => mutation.tableName === requestedTableName);
         }
 
         const grouped = groupMutationsByTable(claimed);
@@ -280,7 +272,7 @@ export function NitroSyncProvider({ config, children }: NitroSyncProviderProps):
             response.acknowledgedMutationIds ?? [],
             response.rejectedMutations ?? [],
           );
-          const acknowledged = new Set(settlement.acknowledged.map((mutation) => mutation.id));
+            const acknowledged = new Set(settlement.acknowledged.map((mutation) => mutation.id));
           const unacked = mutations.filter((mutation) => !acknowledged.has(mutation.id));
           const serverRecords = response.records;
           const serverTimestamp = response.serverTimestamp ?? Date.now();
@@ -353,19 +345,13 @@ export function NitroSyncProvider({ config, children }: NitroSyncProviderProps):
               unackedIds.delete(mutation.id);
             },
             reject: (mutation) => {
-              markRejected(mutation.id);
+              const rejection = response.rejectedMutations?.find(
+                (item) => item.mutationId === mutation.id,
+              );
+              markRejected(mutation.id, rejection?.code ?? 'rejected', rejection?.message ?? '');
               unackedIds.delete(mutation.id);
             },
           });
-          if (!usesNative && storage === null) {
-            const settledIds = new Set([
-              ...acknowledged,
-              ...settlement.rejected.map((mutation) => mutation.id),
-            ]);
-            fallbackMutationsRef.current = fallbackMutationsRef.current.filter(
-              (mutation) => !settledIds.has(mutation.id),
-            );
-          }
           if (response.serverCursor !== undefined) {
             if (storage !== null) {
               storage.setServerCursor(tableName, response.serverCursor);
@@ -442,6 +428,48 @@ export function NitroSyncProvider({ config, children }: NitroSyncProviderProps):
     return recordsRef.current[tableName] ?? [];
   }, []);
 
+  const listRejectedMutations = useCallback((tableName: string): readonly RejectedSyncMutation[] => {
+    const nativeEngine = config.nativeEngine ?? getNitroSync();
+    if (nativeEngine !== null && nativeEngine !== undefined) {
+      return nativeEngine.listRejectedMutations(tableName).map((serialized) => {
+        const raw = JSON.parse(serialized) as {
+          readonly code?: unknown;
+          readonly message?: unknown;
+        };
+        return {
+          mutation: parseSerializedMutation(serialized),
+          code: typeof raw.code === 'string' ? raw.code : 'unknown',
+          message: typeof raw.message === 'string' ? raw.message : '',
+        };
+      });
+    }
+    return storage?.listRejectedMutations(tableName) ?? [];
+  }, [config.nativeEngine, storage]);
+
+  const retryRejectedMutation = useCallback((id: string): void => {
+    const nativeEngine = config.nativeEngine ?? getNitroSync();
+    if (nativeEngine !== null && nativeEngine !== undefined) {
+      nativeEngine.retryRejectedMutation(id);
+    } else if (storage !== null) {
+      storage.retryRejectedMutation(id);
+    } else {
+      throw new Error('No persistent NitroSync queue is available');
+    }
+    setVersion((current) => current + 1);
+  }, [config.nativeEngine, storage]);
+
+  const discardRejectedMutation = useCallback((id: string): void => {
+    const nativeEngine = config.nativeEngine ?? getNitroSync();
+    if (nativeEngine !== null && nativeEngine !== undefined) {
+      nativeEngine.discardRejectedMutation(id);
+    } else if (storage !== null) {
+      storage.discardRejectedMutation(id);
+    } else {
+      throw new Error('No persistent NitroSync queue is available');
+    }
+    setVersion((current) => current + 1);
+  }, [config.nativeEngine, storage]);
+
   const mutate = useCallback<SyncContextValue['mutate']>((mutation) => {
     const schemaVersion = config.schemaVersions?.[mutation.tableName] ?? 1;
     if (!Number.isSafeInteger(schemaVersion) || schemaVersion <= 0) {
@@ -464,9 +492,6 @@ export function NitroSyncProvider({ config, children }: NitroSyncProviderProps):
           ? { ...previousRecord, ...payload, id: recordId }
           : payload,
       ];
-    recordsRef.current = { ...recordsRef.current, [mutation.tableName]: nextTable };
-    setRecords((current) => ({ ...current, [mutation.tableName]: nextTable }));
-
     const persistedRecord = mutation.operation === 'UPDATE'
       ? { ...previousRecord, ...payload, id: recordId }
       : payload;
@@ -481,32 +506,32 @@ export function NitroSyncProvider({ config, children }: NitroSyncProviderProps):
     };
 
     if (usesNative) {
-      nativeEngine.enqueueMutation(
+      nativeEngine.applyMutation(
         mutationId,
         mutation.tableName,
         mutation.operation,
         JSON.stringify(queuePayload),
         timestamp,
         schemaVersion,
+        recordId,
+        JSON.stringify(mutation.operation === 'DELETE' ? { id: recordId } : persistedRecord),
+        mutation.operation === 'DELETE',
       );
     } else if (storage !== null) {
-      storage.saveMutation(nextMutation);
-    } else {
-      fallbackMutationsRef.current = [
-        ...fallbackMutationsRef.current.filter((mutation) => mutation.id !== nextMutation.id),
+      storage.applyMutation(
         nextMutation,
-      ];
+        persistedRecord,
+        mutation.operation === 'DELETE',
+      );
+    } else {
+      throw new Error('No persistent NitroSync queue is available');
     }
 
-    persistRecord(
-      mutation.tableName,
-      persistedRecord,
-      timestamp,
-      mutation.operation === 'DELETE',
-    );
+    recordsRef.current = { ...recordsRef.current, [mutation.tableName]: nextTable };
+    setRecords((current) => ({ ...current, [mutation.tableName]: nextTable }));
     setVersion((current) => current + 1);
     return recordId;
-  }, [config.nativeEngine, config.schemaVersions, persistRecord, storage]);
+  }, [config.nativeEngine, config.schemaVersions, storage]);
 
   const value = useMemo<SyncContextValue>(() => ({
     config,
@@ -516,9 +541,25 @@ export function NitroSyncProvider({ config, children }: NitroSyncProviderProps):
     version,
     ensureTable,
     getRecords,
+    listRejectedMutations,
+    retryRejectedMutation,
+    discardRejectedMutation,
     mutate,
     sync,
-  }), [config, ensureTable, error, getRecords, lastSyncedAt, mutate, status, sync, version]);
+  }), [
+    config,
+    ensureTable,
+    error,
+    getRecords,
+    lastSyncedAt,
+    listRejectedMutations,
+    mutate,
+    retryRejectedMutation,
+    discardRejectedMutation,
+    status,
+    sync,
+    version,
+  ]);
 
   return <SyncContext.Provider value={value}>{children}</SyncContext.Provider>;
 }

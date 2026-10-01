@@ -11,6 +11,10 @@ CREATE TABLE IF NOT EXISTS sync_queue (
   timestamp INTEGER NOT NULL,
   status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'SYNCING', 'FAILED', 'REJECTED')),
   retry_count INTEGER NOT NULL DEFAULT 0,
+  schema_version INTEGER NOT NULL DEFAULT 1,
+  next_retry_at INTEGER NOT NULL DEFAULT 0,
+  rejection_code TEXT,
+  rejection_message TEXT,
   schema_version INTEGER NOT NULL DEFAULT 1
 );
 

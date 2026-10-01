@@ -25,3 +25,4 @@ export type {
   SyncTransportResponse,
 } from './types';
 export type { SqliteResult, SyncMetadataStore, SyncSqliteDatabase, SyncStorage } from './storage';
+export type { RejectedSyncMutation } from './storage';

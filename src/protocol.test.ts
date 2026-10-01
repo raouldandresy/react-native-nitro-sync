@@ -81,6 +81,13 @@ describe('sync protocol helpers', () => {
       acknowledgedMutationIds: [],
       rejectedMutations: [],
       serverTimestamp: expect.any(Number),
+    });
+  });
+
+  it('preserves absent cursor and version separately from explicit null values', () => {
+    expect(normalizeSyncResponse({})).not.toHaveProperty('serverCursor');
+    expect(normalizeSyncResponse({})).not.toHaveProperty('serverVersion');
+    expect(normalizeSyncResponse({ serverCursor: null, serverVersion: null })).toMatchObject({
       serverCursor: null,
       serverVersion: null,
     });

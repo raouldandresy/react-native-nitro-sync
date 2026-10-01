@@ -23,10 +23,18 @@ export interface SyncStorage {
   readonly loadRecords: (tableName: string) => readonly SyncRecord[];
   readonly loadTombstones: (tableName: string) => readonly SyncTombstone[];
   readonly clearTombstone: (tableName: string, recordId: string, throughTimestamp: number) => void;
+  readonly applyMutation: (
+    mutation: SyncMutation<SyncRecord>,
+    record: SyncRecord,
+    deleted: boolean,
+  ) => void;
   readonly saveMutation: (mutation: SyncMutation<SyncRecord>) => void;
-  readonly listPendingMutations: (limit: number) => readonly SyncMutation<SyncRecord>[];
+  readonly listPendingMutations: (limit: number, tableName?: string) => readonly SyncMutation<SyncRecord>[];
+  readonly listRejectedMutations: (tableName: string) => readonly RejectedSyncMutation[];
   readonly markMutationFailed: (id: string) => void;
-  readonly markMutationRejected: (id: string) => void;
+  readonly markMutationRejected: (id: string, code: string, message: string) => void;
+  readonly retryRejectedMutation: (id: string) => void;
+  readonly discardRejectedMutation: (id: string) => void;
   readonly markMutationPending: (id: string) => void;
   readonly recoverStuckMutations: () => void;
   readonly removeMutation: (id: string) => void;
@@ -40,6 +48,12 @@ export interface SyncStorage {
   readonly setServerVersion: (tableName: string, version: number | null) => void;
   readonly getDeviceId: () => string | null;
   readonly setDeviceId: (deviceId: string) => void;
+}
+
+export interface RejectedSyncMutation {
+  readonly mutation: SyncMutation<SyncRecord>;
+  readonly code: string;
+  readonly message: string;
 }
 
 const QUEUE_SCHEMA = [
@@ -70,7 +84,19 @@ const LAST_SYNCED_AT_KEY = 'nitro_sync.last_synced_at';
 const DEVICE_ID_KEY = 'nitro_sync.device_id';
 const SERVER_CURSOR_KEY = 'nitro_sync.server_cursor.';
 const SERVER_VERSION_KEY = 'nitro_sync.server_version.';
-const CURRENT_SCHEMA_VERSION = 4;
+const CURRENT_SCHEMA_VERSION = 5;
+const RETRY_DELAY_SQL = `CASE retry_count
+  WHEN 0 THEN 1000
+  WHEN 1 THEN 2000
+  WHEN 2 THEN 4000
+  WHEN 3 THEN 8000
+  WHEN 4 THEN 16000
+  WHEN 5 THEN 32000
+  WHEN 6 THEN 64000
+  WHEN 7 THEN 128000
+  WHEN 8 THEN 256000
+  ELSE 300000
+END`;
 
 export function readSyncLastSyncedAt(metadataStore?: SyncMetadataStore): number | null {
   const value = metadataStore?.getString(LAST_SYNCED_AT_KEY);
@@ -193,6 +219,19 @@ export function createSyncStorage(
           throw error;
         }
       }
+      if (storedVersion < 5) {
+        database.executeSync('BEGIN IMMEDIATE TRANSACTION');
+        try {
+          database.executeSync('ALTER TABLE sync_queue ADD COLUMN next_retry_at INTEGER NOT NULL DEFAULT 0');
+          database.executeSync('ALTER TABLE sync_queue ADD COLUMN rejection_code TEXT');
+          database.executeSync('ALTER TABLE sync_queue ADD COLUMN rejection_message TEXT');
+          database.executeSync('PRAGMA user_version = 5');
+          database.executeSync('COMMIT');
+        } catch (error) {
+          database.executeSync('ROLLBACK');
+          throw error;
+        }
+      }
       database.executeSync("UPDATE sync_queue SET status = 'PENDING' WHERE status = 'SYNCING'");
     },
     loadRecords: (tableName) => rowsFrom(database.executeSync(
@@ -227,14 +266,59 @@ export function createSyncStorage(
         ],
       );
     },
-    listPendingMutations: (limit) => {
+    applyMutation: (mutation, record, deleted) => {
+      database.executeSync('BEGIN IMMEDIATE TRANSACTION');
+      try {
+        database.executeSync(
+          `INSERT INTO sync_queue
+            (id, table_name, operation, payload, timestamp, status, retry_count, schema_version)
+            VALUES (?, ?, ?, ?, ?, 'PENDING', 0, ?)
+            ON CONFLICT(id) DO NOTHING`,
+          [
+            mutation.id,
+            mutation.tableName,
+            mutation.operation,
+            JSON.stringify(mutation.payload),
+            mutation.timestamp,
+            mutation.schemaVersion ?? 1,
+          ],
+        );
+        if (deleted) {
+          database.executeSync(
+            `INSERT INTO sync_records(table_name, record_id, payload, updated_at, deleted)
+             VALUES (?, ?, ?, ?, 1)
+             ON CONFLICT(table_name, record_id) DO UPDATE SET
+               updated_at = excluded.updated_at, deleted = 1
+             WHERE excluded.updated_at >= sync_records.updated_at`,
+            [mutation.tableName, record.id, JSON.stringify({ id: record.id }), mutation.timestamp],
+          );
+        } else {
+          database.executeSync(
+            `INSERT INTO sync_records(table_name, record_id, payload, updated_at, deleted)
+             VALUES (?, ?, ?, ?, 0)
+             ON CONFLICT(table_name, record_id) DO UPDATE SET
+               payload = excluded.payload, updated_at = excluded.updated_at, deleted = 0
+             WHERE excluded.updated_at >= sync_records.updated_at`,
+            [mutation.tableName, record.id, JSON.stringify(record), mutation.timestamp],
+          );
+        }
+        database.executeSync('COMMIT');
+      } catch (error) {
+        database.executeSync('ROLLBACK');
+        throw error;
+      }
+    },
+    listPendingMutations: (limit, tableName) => {
       database.executeSync('BEGIN IMMEDIATE TRANSACTION');
       try {
         const rows = rowsFrom(database.executeSync(
           `SELECT id, table_name, operation, payload, timestamp, schema_version
-           FROM sync_queue WHERE status IN ('PENDING', 'FAILED')
+           FROM sync_queue
+           WHERE status IN ('PENDING', 'FAILED')
+             AND next_retry_at <= (strftime('%s', 'now') * 1000)
+             ${tableName === undefined ? '' : 'AND table_name = ?'}
            ORDER BY timestamp ASC LIMIT ?`,
-          [limit],
+          tableName === undefined ? [limit] : [tableName, limit],
         ));
         const mutations = rows.map((row): SyncMutation<SyncRecord> | null => {
           if (typeof row.id !== 'string' || typeof row.table_name !== 'string' || typeof row.operation !== 'string') return null;
@@ -259,17 +343,69 @@ export function createSyncStorage(
         throw error;
       }
     },
+    listRejectedMutations: (tableName) => rowsFrom(database.executeSync(
+      `SELECT id, table_name, operation, payload, timestamp, schema_version,
+              rejection_code, rejection_message
+       FROM sync_queue WHERE status = 'REJECTED' AND table_name = ?
+       ORDER BY timestamp ASC`,
+      [tableName],
+    )).flatMap((row): RejectedSyncMutation[] => {
+      if (
+        typeof row.id !== 'string' || typeof row.table_name !== 'string' ||
+        typeof row.operation !== 'string' ||
+        (row.operation !== 'CREATE' && row.operation !== 'UPDATE' && row.operation !== 'DELETE') ||
+        typeof row.payload !== 'string' || typeof row.timestamp !== 'number'
+      ) {
+        return [];
+      }
+      const payload = parseSerializedRecord(row.payload);
+      if (payload === null) return [];
+      return [{
+        mutation: {
+          id: row.id,
+          tableName: row.table_name,
+          operation: row.operation,
+          payload,
+          timestamp: row.timestamp,
+          schemaVersion: typeof row.schema_version === 'number' ? row.schema_version : 1,
+        },
+        code: typeof row.rejection_code === 'string' ? row.rejection_code : 'unknown',
+        message: typeof row.rejection_message === 'string' ? row.rejection_message : '',
+      }];
+    }),
     markMutationFailed: (id) => {
       database.executeSync(
-        "UPDATE sync_queue SET status = 'FAILED', retry_count = retry_count + 1 WHERE id = ?",
+        `UPDATE sync_queue
+         SET status = 'FAILED',
+             next_retry_at = (strftime('%s', 'now') * 1000) + (${RETRY_DELAY_SQL}),
+             retry_count = retry_count + 1
+         WHERE id = ?`,
         [id],
       );
     },
-    markMutationRejected: (id) => {
-      database.executeSync("UPDATE sync_queue SET status = 'REJECTED' WHERE id = ?", [id]);
+    markMutationRejected: (id, code, message) => {
+      database.executeSync(
+        "UPDATE sync_queue SET status = 'REJECTED', rejection_code = ?, rejection_message = ? WHERE id = ?",
+        [code, message, id],
+      );
+    },
+    retryRejectedMutation: (id) => {
+      database.executeSync(
+        "UPDATE sync_queue SET status = 'PENDING', retry_count = 0, next_retry_at = 0, rejection_code = NULL, rejection_message = NULL WHERE id = ? AND status = 'REJECTED'",
+        [id],
+      );
+    },
+    discardRejectedMutation: (id) => {
+      database.executeSync(
+        "DELETE FROM sync_queue WHERE id = ? AND status = 'REJECTED'",
+        [id],
+      );
     },
     markMutationPending: (id) => {
-      database.executeSync("UPDATE sync_queue SET status = 'PENDING' WHERE id = ?", [id]);
+      database.executeSync(
+        "UPDATE sync_queue SET status = 'PENDING', next_retry_at = 0 WHERE id = ?",
+        [id],
+      );
     },
     recoverStuckMutations: () => {
       database.executeSync("UPDATE sync_queue SET status = 'PENDING' WHERE status = 'SYNCING'");

@@ -15,12 +15,17 @@ namespace margelo::nitro::nitrosync {
     // load custom methods/properties
     registerHybrids(this, [](Prototype& prototype) {
       prototype.registerHybridMethod("initialize", &HybridNitroSyncSpec::initialize);
+      prototype.registerHybridMethod("applyMutation", &HybridNitroSyncSpec::applyMutation);
       prototype.registerHybridMethod("enqueueMutation", &HybridNitroSyncSpec::enqueueMutation);
       prototype.registerHybridMethod("listPendingMutations", &HybridNitroSyncSpec::listPendingMutations);
+      prototype.registerHybridMethod("listPendingMutationsForTable", &HybridNitroSyncSpec::listPendingMutationsForTable);
+      prototype.registerHybridMethod("listRejectedMutations", &HybridNitroSyncSpec::listRejectedMutations);
       prototype.registerHybridMethod("markMutationSyncing", &HybridNitroSyncSpec::markMutationSyncing);
       prototype.registerHybridMethod("markMutationFailed", &HybridNitroSyncSpec::markMutationFailed);
       prototype.registerHybridMethod("markMutationRejected", &HybridNitroSyncSpec::markMutationRejected);
       prototype.registerHybridMethod("markMutationPending", &HybridNitroSyncSpec::markMutationPending);
+      prototype.registerHybridMethod("retryRejectedMutation", &HybridNitroSyncSpec::retryRejectedMutation);
+      prototype.registerHybridMethod("discardRejectedMutation", &HybridNitroSyncSpec::discardRejectedMutation);
       prototype.registerHybridMethod("removeMutation", &HybridNitroSyncSpec::removeMutation);
       prototype.registerHybridMethod("upsertRecord", &HybridNitroSyncSpec::upsertRecord);
       prototype.registerHybridMethod("deleteRecord", &HybridNitroSyncSpec::deleteRecord);

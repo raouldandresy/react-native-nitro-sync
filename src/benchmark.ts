@@ -23,6 +23,10 @@ function assertBatchSizes(batchSizes: readonly number[]): void {
   }
 }
 
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 export async function benchmarkNativeSyncQueue(
   nativeEngine: Pick<
     NitroSync,
@@ -46,13 +50,6 @@ export async function benchmarkNativeSyncQueue(
     const ids = Array.from({ length: mutationCount }, (_, index) => `${tableName}_${index}`);
 
     let jsBlockingMs = 0;
-    const timerStartedAt = now();
-    const timer = new Promise<void>((resolve) => {
-      setTimeout(() => {
-        jsBlockingMs = now() - timerStartedAt;
-        resolve();
-      }, 0);
-    });
 
     for (let index = 0; index < mutationCount; index += 1) {
       const serializationStartedAt = now();
@@ -74,6 +71,12 @@ export async function benchmarkNativeSyncQueue(
         1,
       );
       enqueueMs += now() - enqueueStartedAt;
+
+      if ((index + 1) % 100 === 0 && index + 1 < mutationCount) {
+        const yieldStartedAt = now();
+        await yieldToEventLoop();
+        jsBlockingMs = Math.max(jsBlockingMs, now() - yieldStartedAt);
+      }
     }
 
     const claimStartedAt = now();
@@ -97,8 +100,6 @@ export async function benchmarkNativeSyncQueue(
         }
       }
     }
-    await timer;
-
     results.push({
       mutationCount,
       payloadBodyBytes: payloadBytes,

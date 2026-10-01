@@ -98,6 +98,30 @@ void NitroSync::initialize(const std::string& databasePath) {
   queue_->initialize();
 }
 
+void NitroSync::applyMutation(
+    const std::string& id,
+    const std::string& tableName,
+    MutationOperation operation,
+    const std::string& payload,
+    double timestamp,
+    double schemaVersion,
+    const std::string& recordId,
+    const std::string& recordPayload,
+    bool deleted) {
+  queue().applyMutation(
+      {id,
+       tableName,
+       toQueueOperation(operation),
+       payload,
+       static_cast<std::int64_t>(timestamp),
+       static_cast<std::int32_t>(schemaVersion),
+       ::nitrosync::MutationStatus::Pending,
+       0},
+      recordId,
+      recordPayload,
+      deleted);
+}
+
 ::nitrosync::MutationQueue& NitroSync::queue() {
   if (queue_ == nullptr) throw std::runtime_error("NitroSync.initialize() must be called first");
   return *queue_;
@@ -136,10 +160,37 @@ std::vector<std::string> NitroSync::listPendingMutations(double limit) {
   return serialized;
 }
 
+std::vector<std::string> NitroSync::listPendingMutationsForTable(
+    const std::string& tableName,
+    double limit) {
+  const std::size_t safeLimit = static_cast<std::size_t>(std::max(0.0, std::floor(limit)));
+  std::vector<std::string> serialized;
+  for (const ::nitrosync::Mutation& mutation : queue().claimPending(safeLimit, tableName)) {
+    serialized.push_back("{\"id\":" + quoteJson(mutation.id) +
+                         ",\"tableName\":" + quoteJson(mutation.tableName) +
+                         ",\"operation\":" + quoteJson(operationName(mutation.operation)) +
+                         ",\"payload\":" + quoteJson(mutation.payload) +
+                         ",\"timestamp\":" + std::to_string(mutation.timestamp) +
+                         ",\"schemaVersion\":" + std::to_string(mutation.schemaVersion) + "}");
+  }
+  return serialized;
+}
+
+std::vector<std::string> NitroSync::listRejectedMutations(const std::string& tableName) {
+  return queue().listRejected(tableName);
+}
+
 void NitroSync::markMutationSyncing(const std::string& id) { queue().markSyncing(id); }
 void NitroSync::markMutationFailed(const std::string& id) { queue().markFailed(id); }
-void NitroSync::markMutationRejected(const std::string& id) { queue().markRejected(id); }
+void NitroSync::markMutationRejected(
+    const std::string& id,
+    const std::string& code,
+    const std::string& message) {
+  queue().markRejected(id, code, message);
+}
 void NitroSync::markMutationPending(const std::string& id) { queue().markPending(id); }
+void NitroSync::retryRejectedMutation(const std::string& id) { queue().retryRejected(id); }
+void NitroSync::discardRejectedMutation(const std::string& id) { queue().discardRejected(id); }
 void NitroSync::removeMutation(const std::string& id) { queue().remove(id); }
 void NitroSync::upsertRecord(const std::string& tableName, const std::string& recordId, const std::string& payload, double timestamp) { queue().upsertRecord(tableName, recordId, payload, static_cast<std::int64_t>(timestamp)); }
 void NitroSync::deleteRecord(const std::string& tableName, const std::string& recordId, double timestamp) { queue().deleteRecord(tableName, recordId, static_cast<std::int64_t>(timestamp)); }

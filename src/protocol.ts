@@ -27,7 +27,8 @@ function isObject(value: unknown): value is Record<string, unknown> {
 
 export function normalizeSyncResponse<T extends SyncRecord>(
   value: unknown,
-): Required<Pick<SyncTransportResponse<T>, 'protocolVersion' | 'acknowledgedMutationIds' | 'serverTimestamp' | 'serverCursor' | 'serverVersion' | 'tombstones' | 'rejectedMutations'>> & Pick<SyncTransportResponse<T>, 'records'> {
+): Required<Pick<SyncTransportResponse<T>, 'protocolVersion' | 'acknowledgedMutationIds' | 'serverTimestamp' | 'tombstones' | 'rejectedMutations'>>
+  & Pick<SyncTransportResponse<T>, 'records' | 'serverCursor' | 'serverVersion'> {
   if (!isObject(value)) {
     throw new Error('Invalid sync response: expected an object');
   }
@@ -104,7 +105,11 @@ export function normalizeSyncResponse<T extends SyncRecord>(
     acknowledgedMutationIds: (response.acknowledgedMutationIds as readonly string[] | undefined) ?? [],
     rejectedMutations: (response.rejectedMutations as SyncTransportResponse<T>['rejectedMutations']) ?? [],
     serverTimestamp: (response.serverTimestamp as number | undefined) ?? Date.now(),
-    serverCursor: (response.serverCursor as string | null | undefined) ?? null,
-    serverVersion: (response.serverVersion as number | null | undefined) ?? null,
+    ...(response.serverCursor === undefined
+      ? {}
+      : { serverCursor: response.serverCursor as string | null }),
+    ...(response.serverVersion === undefined
+      ? {}
+      : { serverVersion: response.serverVersion as number | null }),
   };
 }

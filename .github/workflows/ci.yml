@@ -29,5 +29,130 @@ jobs:
       - name: Run TypeScript typecheck
         run: npm run typecheck
 
+      - name: Run lint
+        run: npm run lint
+
+      - name: Run tests
+        run: npm test -- --runInBand
+
       - name: Build package
         run: npm run prepare
+
+  android-native:
+    name: Android native & 16 KB alignment
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install package dependencies
+        run: npm ci
+
+      - name: Install example dependencies
+        working-directory: example
+        run: npm ci
+
+      - name: Generate Android project
+        working-directory: example
+        run: npx expo prebuild --platform android --no-install
+
+      - name: Build Android example APK
+        working-directory: example/android
+        run: ./gradlew :app:assembleDebug --console=plain
+
+      - name: Verify 16 KB ELF and APK alignment
+        run: |
+          LLVM_READELF="$(find "$ANDROID_HOME/ndk" -name llvm-readelf -print -quit)"
+          test -x "$LLVM_READELF"
+          APK="$(find example/android/app/build/outputs/apk/debug -name app-debug.apk -print -quit)"
+          test -n "$APK"
+          APK="$APK" LLVM_READELF="$LLVM_READELF" python3 - <<'PY'
+          import os
+          import subprocess
+          import tempfile
+          import zipfile
+          from pathlib import Path
+
+          with zipfile.ZipFile(os.environ["APK"]) as apk:
+              libraries = [name for name in apk.namelist() if name.startswith("lib/") and name.endswith(".so")]
+              if not libraries:
+                  raise SystemExit("No native shared libraries found in the example APK")
+              with tempfile.TemporaryDirectory() as temporary_directory:
+                  for name in libraries:
+                      binary = Path(temporary_directory, name)
+                      binary.parent.mkdir(parents=True, exist_ok=True)
+                      binary.write_bytes(apk.read(name))
+                      output = subprocess.check_output(
+                          [os.environ["LLVM_READELF"], "-l", str(binary)],
+                          text=True,
+                      )
+                      alignments = [
+                          int(line.split()[-1], 0)
+                          for line in output.splitlines()
+                          if line.strip().startswith("LOAD ")
+                      ]
+                      if not alignments or min(alignments) < 16_384:
+                          raise SystemExit(f"{name} has LOAD segment alignment below 16 KB: {alignments}")
+          PY
+          ZIPALIGN="$(find "$ANDROID_HOME/build-tools" -name zipalign -print -quit)"
+          test -x "$ZIPALIGN"
+          "$ZIPALIGN" -c -P 16 4 "$APK"
+
+  ios-native:
+    name: iOS Release simulator build
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+          cache-dependency-path: |
+            package-lock.json
+            example/package-lock.json
+
+      - name: Install package dependencies
+        run: npm ci
+
+      - name: Install example dependencies
+        working-directory: example
+        run: npm ci
+
+      - name: Generate iOS project
+        working-directory: example
+        run: npx expo prebuild --platform ios --no-install
+
+      - name: Install CocoaPods
+        working-directory: example/ios
+        run: pod install
+
+      - name: Build iOS example for Simulator
+        run: >
+          xcodebuild
+          -workspace example/ios/NitroSyncExample.xcworkspace
+          -scheme NitroSyncExample
+          -configuration Release
+          -sdk iphonesimulator
+          -destination 'generic/platform=iOS Simulator'
+          CODE_SIGNING_ALLOWED=NO
+          build
