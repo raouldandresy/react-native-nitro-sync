@@ -17,9 +17,16 @@ updates:
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
       - dependency-name: "typescript"
         update-types: ["version-update:semver-major"]
-      # react-native@0.76.x dichiara un peerDependency @types/react ^18.2.6:
-      # un major bump di react/@types/react a 19.x rompe `npm ci` (ERESOLVE)
-      # finché react-native non aggiorna il proprio peer range.
+      # @babel/core 8.x è un major appena rilasciato con breaking change noti
+      # (formato di configurazione, requisiti Node più recenti) che possono
+      # rompere la toolchain di build (react-native-builder-bob/Jest).
+      - dependency-name: "@babel/core"
+        update-types: ["version-update:semver-major"]
+      # react e @types/react seguono il peerDependency range dichiarato dalla
+      # versione di react-native in uso (attualmente react-native@0.86.x
+      # richiede react/@types/react ^19.x): un major bump indipendente rompe
+      # `npm ci` (ERESOLVE) finché react-native non aggiorna a sua volta il
+      # proprio peer range.
       - dependency-name: "react"
         update-types: ["version-update:semver-major"]
       - dependency-name: "@types/react"
@@ -47,3 +54,9 @@ updates:
         update-types: ["version-update:semver-major"]
       - dependency-name: "react-native-nitro-modules"
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
