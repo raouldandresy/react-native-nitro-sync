@@ -18,6 +18,11 @@ def isNewArchitectureEnabled() {
 }
 
 def opSqliteProject = findProject(':op-engineering_op-sqlite')
+if (opSqliteProject == null) {
+  throw new GradleException(
+    "@op-engineering/op-sqlite is required to build react-native-nitro-sync on Android because its SQLite amalgamation is used by the Nitro C++ queue."
+  )
+}
 
 android {
   namespace 'com.nitrosync'
@@ -33,7 +38,7 @@ android {
     externalNativeBuild {
       cmake {
         cppFlags "-std=c++20 -fexceptions -frtti"
-        arguments "-DANDROID_STL=c++_shared", "-DOP_SQLITE_DIR=${opSqliteProject?.projectDir?.absolutePath ?: ''}"
+        arguments "-DANDROID_STL=c++_shared", "-DOP_SQLITE_DIR=${opSqliteProject.projectDir.absolutePath}"
         abiFilters (*reactNativeArchitectures())
       }
     }

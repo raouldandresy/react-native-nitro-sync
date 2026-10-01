@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_VERBOSE_MAKEFILE ON)
 
-if(NOT DEFINED OP_SQLITE_DIR)
+if(NOT DEFINED OP_SQLITE_DIR OR OP_SQLITE_DIR STREQUAL "")
   message(FATAL_ERROR "OP_SQLITE_DIR must point to the Android project directory for @op-engineering/op-sqlite")
 endif()
 

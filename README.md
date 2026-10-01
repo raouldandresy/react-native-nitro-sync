@@ -22,8 +22,8 @@ Local-first and offline-first synchronization primitives for React Native. The c
 
 - React Native 0.73+ with the New Architecture enabled.
 - iOS 13.4+ or Android API 24+.
-- `react-native-nitro-modules` 0.25+.
-- A SQLite provider such as `@op-engineering/op-sqlite` when using the TypeScript storage adapter.
+- `react-native-nitro-modules` 0.36.5+.
+- `@op-engineering/op-sqlite` 10+ is required to build the Android Nitro C++ queue, which compiles the SQLite amalgamation shipped by this package; it is also the default provider for the TypeScript storage adapter, though another provider can be used there.
 - `react-native-mmkv` for persistent sync metadata in the standard setup.
 
 ## Installation
@@ -41,6 +41,8 @@ npx expo prebuild
 npx expo run:ios
 # or: npx expo run:android
 ```
+
+The package's `prepare` script runs Nitrogen to generate the C++ spec and platform autolinking files before building the package. Generated files are checked in for native builds; when changing the Nitro spec or `nitro.json` in a source checkout, run `npm run generate` and commit the updated `nitrogen/generated` output.
 
 Add the config plugin to `app.json` if background-task configuration is required:
 
