@@ -91,7 +91,7 @@
     "@types/react": "19.2.3",
     "eslint": "^10.11.0",
     "jest": "^30.5.2",
-    "nitrogen": "0.36.1",
+    "nitrogen": "0.37.1",
     "react": "19.2.3",
     "react-native": "0.86.3",
     "react-native-builder-bob": "^0.40.12",
