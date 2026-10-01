@@ -1,0 +1,18 @@
+{
+  "cxxNamespace": ["nitrosync"],
+  "ios": {
+    "iosModuleName": "NitroSync"
+  },
+  "android": {
+    "androidNamespace": ["nitrosync"],
+    "androidCxxLibName": "NitroSync"
+  },
+  "autolinking": {
+    "NitroSync": {
+      "all": {
+        "language": "c++",
+        "implementationClassName": "NitroSync"
+      }
+    }
+  }
+}

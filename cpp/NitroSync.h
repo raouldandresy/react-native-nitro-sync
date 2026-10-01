@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-#include <NitroModules/HybridObject.hpp>
+#include "HybridNitroSyncSpec.hpp"
 #include "MutationQueue.h"
 
 namespace nitrosync {
@@ -16,33 +16,35 @@ namespace nitrosync {
 // separator, it is returned unchanged so callers can opt into an explicit
 // location. See NitroSync.cpp for the platform-specific implementation.
 std::string resolveDatabasePath(const std::string& name);
+void setDatabaseDirectory(const std::string& directory);
 
-class NitroSync final : public margelo::nitro::HybridObject {
+}
+
+namespace margelo::nitro::nitrosync {
+
+class NitroSync final : public HybridNitroSyncSpec {
  public:
-  NitroSync();
+  NitroSync() : HybridObject(TAG) {}
 
-  void initialize(const std::string& databasePath);
-  void enqueueMutation(const std::string& id, const std::string& tableName, const std::string& operation, const std::string& payload, double timestamp, double schemaVersion);
-  std::vector<std::string> listPendingMutations(double limit);
-  void markMutationSyncing(const std::string& id);
-  void markMutationFailed(const std::string& id);
-  void markMutationRejected(const std::string& id);
-  void markMutationPending(const std::string& id);
-  void removeMutation(const std::string& id);
-  void upsertRecord(const std::string& tableName, const std::string& recordId, const std::string& payload, double timestamp);
-  void deleteRecord(const std::string& tableName, const std::string& recordId, double timestamp);
-  std::vector<std::string> readRecords(const std::string& tableName);
-  std::vector<std::string> readTombstones(const std::string& tableName);
-  void clearTombstone(const std::string& tableName, const std::string& recordId, double throughTimestamp);
-
- protected:
-  void loadHybridMethods() override;
+  void initialize(const std::string& databasePath) override;
+  void enqueueMutation(const std::string& id, const std::string& tableName, MutationOperation operation, const std::string& payload, double timestamp, double schemaVersion) override;
+  std::vector<std::string> listPendingMutations(double limit) override;
+  void markMutationSyncing(const std::string& id) override;
+  void markMutationFailed(const std::string& id) override;
+  void markMutationRejected(const std::string& id) override;
+  void markMutationPending(const std::string& id) override;
+  void removeMutation(const std::string& id) override;
+  void upsertRecord(const std::string& tableName, const std::string& recordId, const std::string& payload, double timestamp) override;
+  void deleteRecord(const std::string& tableName, const std::string& recordId, double timestamp) override;
+  std::vector<std::string> readRecords(const std::string& tableName) override;
+  std::vector<std::string> readTombstones(const std::string& tableName) override;
+  void clearTombstone(const std::string& tableName, const std::string& recordId, double throughTimestamp) override;
 
  private:
-  MutationQueue& queue();
-  std::unique_ptr<MutationQueue> queue_;
+  ::nitrosync::MutationQueue& queue();
+  std::unique_ptr<::nitrosync::MutationQueue> queue_;
 };
 
-}  // namespace nitrosync
+}
 
 #endif // __cplusplus

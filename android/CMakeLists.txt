@@ -5,37 +5,38 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_VERBOSE_MAKEFILE ON)
 
-if(NOT DEFINED NITRO_MODULES_DIR)
-  message(FATAL_ERROR "NITRO_MODULES_DIR must point to react-native-nitro-modules")
+if(NOT DEFINED OP_SQLITE_DIR)
+  message(FATAL_ERROR "OP_SQLITE_DIR must point to the Android project directory for @op-engineering/op-sqlite")
 endif()
 
 find_package(ReactAndroid REQUIRED CONFIG)
 find_package(fbjni REQUIRED CONFIG)
-find_package(NitroModules REQUIRED CONFIG)
+find_package(react-native-nitro-modules REQUIRED CONFIG)
 
 add_library(NitroSync SHARED
   ../cpp/MutationQueue.cpp
   ../cpp/NitroSync.cpp
+  ${OP_SQLITE_DIR}/../cpp/sqlite3.c
+  src/main/cpp/NitroSyncOnLoad.cpp
 )
 
 target_include_directories(NitroSync PRIVATE
   ../cpp
-  ${NITRO_MODULES_DIR}/cpp/core
-  ${NITRO_MODULES_DIR}/cpp/entrypoint
-  ${NITRO_MODULES_DIR}/cpp/jsi
-  ${NITRO_MODULES_DIR}/cpp/platform
-  ${NITRO_MODULES_DIR}/cpp/prototype
-  ${NITRO_MODULES_DIR}/cpp/registry
-  ${NITRO_MODULES_DIR}/cpp/templates
-  ${NITRO_MODULES_DIR}/cpp/threading
-  ${NITRO_MODULES_DIR}/cpp/utils
+  ${OP_SQLITE_DIR}/../cpp
 )
 
-target_compile_options(NitroSync PRIVATE -fexceptions -frtti -Wall -Wextra -fstack-protector-all)
+target_compile_options(NitroSync PRIVATE
+  -fexceptions
+  -frtti
+  -Wall
+  -Wextra
+  -fstack-protector-all
+)
+
 target_link_libraries(NitroSync
-  NitroModules::NitroModules
-  ReactAndroid::jsi
-  fbjni::fbjni
+  react-native-nitro-modules::NitroModules
   log
   android
 )
+
+include(${CMAKE_CURRENT_SOURCE_DIR}/../nitrogen/generated/android/NitroSync+autolinking.cmake)

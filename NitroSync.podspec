@@ -14,7 +14,7 @@ Pod::Spec.new do |s|
   s.swift_version = '5.9'
 
   s.source_files  = [
-    'cpp/**/*.{h,cpp}',
+    'cpp/**/*.{h,hpp,cpp}',
     'ios/**/*.{h,m,mm,swift}'
   ]
 
@@ -27,7 +27,9 @@ Pod::Spec.new do |s|
     'HEADER_SEARCH_PATHS' => '$(inherited) "${PODS_ROOT}/Headers/Public/NitroModules"'
   }
 
+  load 'nitrogen/generated/ios/NitroSync+autolinking.rb'
+  add_nitrogen_files(s)
+
   s.dependency 'React-Core'
   s.dependency 'React-jsi'
-  s.dependency 'NitroModules'
 end

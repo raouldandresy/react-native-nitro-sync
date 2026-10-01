@@ -4,24 +4,36 @@ buildscript {
 
 apply plugin: 'com.android.library'
 apply plugin: 'org.jetbrains.kotlin.android'
+if (rootProject.hasProperty("newArchEnabled") && rootProject.getProperty("newArchEnabled") == "true") {
+  apply plugin: "com.facebook.react"
+}
 
 def reactNativeArchitectures() {
   def value = rootProject.getProperties().get("reactNativeArchitectures")
   return value ? value.split(",") : ["armeabi-v7a", "x86", "x86_64", "arm64-v8a"]
 }
 
-def nitroModulesDir = rootProject.file("node_modules/react-native-nitro-modules")
+def isNewArchitectureEnabled() {
+  return rootProject.hasProperty("newArchEnabled") && rootProject.getProperty("newArchEnabled") == "true"
+}
+
+def opSqliteProject = findProject(':op-engineering_op-sqlite')
 
 android {
   namespace 'com.nitrosync'
   compileSdkVersion rootProject.ext.has('compileSdkVersion') ? rootProject.ext.compileSdkVersion : 34
+
+  buildFeatures {
+    prefab true
+    prefabPublishing true
+  }
 
   defaultConfig {
     minSdkVersion rootProject.ext.has('minSdkVersion') ? rootProject.ext.minSdkVersion : 24
     externalNativeBuild {
       cmake {
         cppFlags "-std=c++20 -fexceptions -frtti"
-        arguments "-DANDROID_STL=c++_shared", "-DNITRO_MODULES_DIR=${nitroModulesDir.absolutePath}"
+        arguments "-DANDROID_STL=c++_shared", "-DOP_SQLITE_DIR=${opSqliteProject?.projectDir?.absolutePath ?: ''}"
         abiFilters (*reactNativeArchitectures())
       }
     }
@@ -35,9 +47,20 @@ android {
 }
 
 dependencies {
+  implementation "com.facebook.react:react-native:+"
   implementation "androidx.work:work-runtime-ktx:2.9.1"
   def nitroProject = findProject(':react-native-nitro-modules')
   if (nitroProject != null) {
     implementation nitroProject
   }
 }
+
+if (isNewArchitectureEnabled()) {
+  react {
+    jsRootDir = file("../")
+    libraryName = "NitroSyncSpec"
+    codegenJavaPackageName = "com.nitrosync"
+  }
+}
+
+apply from: '../nitrogen/generated/android/NitroSync+autolinking.gradle'

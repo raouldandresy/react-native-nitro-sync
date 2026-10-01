@@ -70,7 +70,7 @@ export default function SyncScreen(): React.JSX.Element {
           <ActionButton label="Simula un errore" onPress={() => { void runFailureDemo(); }} secondary />
         </Card>
       )}
-      <Card title="Coda nativa Nitro" detail="Benchmark sintetico su un database SQLite dedicato. I risultati del simulatore non sono risultati di device fisico.">
+      <Card title="Coda nativa Nitro" detail="Benchmark sintetico su un database SQLite dedicato. I risultati del runtime corrente non sono rappresentativi di un dispositivo fisico.">
         <Link asChild href="../benchmark">
           <Pressable style={styles.benchmarkLink}>
             <Text style={styles.benchmarkLinkText}>Apri benchmark della queue →</Text>

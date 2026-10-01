@@ -1,6 +1,6 @@
 import { NitroModules } from 'react-native-nitro-modules';
 import { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import {
   benchmarkNativeSyncQueue,
   type NitroSync,
@@ -65,14 +65,15 @@ export default function BenchmarkScreen(): React.JSX.Element {
   return (
     <ScreenShell>
       <Intro
-        eyebrow="Native queue · iOS simulator"
+        eyebrow={`Native queue · ${Platform.OS === 'android' ? 'Android' : 'iOS'}`}
         title="Benchmark"
         detail={`Dedicated SQLite database · ${RUNS} runs per batch · median shown. Synthetic ${BATCH_SIZES.join(', ')}-mutation batches with 256-byte bodies.`}
       />
       <Card title="Interpretazione">
         <Text style={styles.body}>
-          Queste misure includono runtime e database del simulatore corrente. Non sono prestazioni
-          di un iPhone fisico né una previsione della latenza end-to-end o del consumo di memoria.
+          Queste misure includono runtime e database del dispositivo o simulatore corrente. Non sono
+          prestazioni rappresentative di un dispositivo fisico né una previsione della latenza
+          end-to-end o del consumo di memoria.
         </Text>
       </Card>
       {status === 'running' && (

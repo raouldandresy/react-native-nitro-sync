@@ -1,7 +1,5 @@
 #include "NitroSync.h"
 
-#include <HybridObjectRegistry.hpp>
-
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -10,33 +8,7 @@
 namespace nitrosync {
 namespace {
 
-MutationOperation parseOperation(const std::string& operation) {
-  if (operation == "CREATE") return MutationOperation::Create;
-  if (operation == "UPDATE") return MutationOperation::Update;
-  if (operation == "DELETE") return MutationOperation::Delete;
-  throw std::invalid_argument("Unknown mutation operation: " + operation);
-}
-
-std::string quoteJson(const std::string& value) {
-  std::string escaped;
-  escaped.reserve(value.size() + 2);
-  escaped.push_back('"');
-  for (const char character : value) {
-    if (character == '"' || character == '\\') escaped.push_back('\\');
-    escaped.push_back(character);
-  }
-  escaped.push_back('"');
-  return escaped;
-}
-
-const char* operationName(MutationOperation operation) {
-  switch (operation) {
-    case MutationOperation::Create: return "CREATE";
-    case MutationOperation::Update: return "UPDATE";
-    case MutationOperation::Delete: return "DELETE";
-  }
-  throw std::invalid_argument("Unknown mutation operation");
-}
+std::string databaseDirectory;
 
 }  // namespace
 
@@ -54,54 +26,98 @@ std::string resolveDatabasePath(const std::string& name) {
   const std::string base = home != nullptr ? std::string(home) + "/Documents" : ".";
   return base + "/" + name;
 #else
-  // Android has no writable-directory environment variable equivalent to
-  // iOS's HOME; the app-private files directory must come from the Java
-  // Context (see Context#getFilesDir()). Until that plumbing exists, fall
-  // back to the given relative name, matching the previous behavior.
-  return name;
+  if (databaseDirectory.empty()) {
+    throw std::runtime_error("Android database directory has not been initialized");
+  }
+  return databaseDirectory + "/" + name;
 #endif
 }
 
-NitroSync::NitroSync() : HybridObject("NitroSync") {}
-
-void NitroSync::loadHybridMethods() {
-  HybridObject::loadHybridMethods();
-  registerHybrids(this, [](margelo::nitro::Prototype& prototype) {
-    prototype.registerHybridMethod("initialize", &NitroSync::initialize);
-    prototype.registerHybridMethod("enqueueMutation", &NitroSync::enqueueMutation);
-    prototype.registerHybridMethod("listPendingMutations", &NitroSync::listPendingMutations);
-    prototype.registerHybridMethod("markMutationSyncing", &NitroSync::markMutationSyncing);
-    prototype.registerHybridMethod("markMutationFailed", &NitroSync::markMutationFailed);
-    prototype.registerHybridMethod("markMutationRejected", &NitroSync::markMutationRejected);
-    prototype.registerHybridMethod("markMutationPending", &NitroSync::markMutationPending);
-    prototype.registerHybridMethod("removeMutation", &NitroSync::removeMutation);
-    prototype.registerHybridMethod("upsertRecord", &NitroSync::upsertRecord);
-    prototype.registerHybridMethod("deleteRecord", &NitroSync::deleteRecord);
-    prototype.registerHybridMethod("readRecords", &NitroSync::readRecords);
-    prototype.registerHybridMethod("readTombstones", &NitroSync::readTombstones);
-    prototype.registerHybridMethod("clearTombstone", &NitroSync::clearTombstone);
-  });
+void setDatabaseDirectory(const std::string& directory) {
+  databaseDirectory = directory;
 }
 
+}  // namespace nitrosync
+
+namespace margelo::nitro::nitrosync {
+namespace {
+
+using QueueOperation = ::nitrosync::MutationOperation;
+
+QueueOperation toQueueOperation(MutationOperation operation) {
+  switch (operation) {
+    case MutationOperation::CREATE: return QueueOperation::Create;
+    case MutationOperation::UPDATE: return QueueOperation::Update;
+    case MutationOperation::DELETE: return QueueOperation::Delete;
+  }
+  throw std::invalid_argument("Unknown mutation operation");
+}
+
+const char* operationName(QueueOperation operation) {
+  switch (operation) {
+    case QueueOperation::Create: return "CREATE";
+    case QueueOperation::Update: return "UPDATE";
+    case QueueOperation::Delete: return "DELETE";
+  }
+  throw std::invalid_argument("Unknown mutation operation");
+}
+
+std::string quoteJson(const std::string& value) {
+  static constexpr char hex[] = "0123456789abcdef";
+  std::string escaped;
+  escaped.reserve(value.size() + 2);
+  escaped.push_back('"');
+  for (const unsigned char character : value) {
+    switch (character) {
+      case '"': escaped.append("\\\""); break;
+      case '\\': escaped.append("\\\\"); break;
+      case '\b': escaped.append("\\b"); break;
+      case '\f': escaped.append("\\f"); break;
+      case '\n': escaped.append("\\n"); break;
+      case '\r': escaped.append("\\r"); break;
+      case '\t': escaped.append("\\t"); break;
+      default:
+        if (character < 0x20) {
+          escaped.append("\\u00");
+          escaped.push_back(hex[(character >> 4) & 0x0f]);
+          escaped.push_back(hex[character & 0x0f]);
+        } else {
+          escaped.push_back(static_cast<char>(character));
+        }
+    }
+  }
+  escaped.push_back('"');
+  return escaped;
+}
+
+}  // namespace
+
 void NitroSync::initialize(const std::string& databasePath) {
-  queue_ = std::make_unique<MutationQueue>(resolveDatabasePath(databasePath));
+  queue_ = std::make_unique<::nitrosync::MutationQueue>(
+      ::nitrosync::resolveDatabasePath(databasePath));
   queue_->initialize();
 }
 
-MutationQueue& NitroSync::queue() {
+::nitrosync::MutationQueue& NitroSync::queue() {
   if (queue_ == nullptr) throw std::runtime_error("NitroSync.initialize() must be called first");
   return *queue_;
 }
 
-void NitroSync::enqueueMutation(const std::string& id, const std::string& tableName, const std::string& operation, const std::string& payload, double timestamp, double schemaVersion) {
+void NitroSync::enqueueMutation(
+    const std::string& id,
+    const std::string& tableName,
+    MutationOperation operation,
+    const std::string& payload,
+    double timestamp,
+    double schemaVersion) {
   queue().enqueue({
       id,
       tableName,
-      parseOperation(operation),
+      toQueueOperation(operation),
       payload,
       static_cast<std::int64_t>(timestamp),
       static_cast<std::int32_t>(schemaVersion),
-      MutationStatus::Pending,
+      ::nitrosync::MutationStatus::Pending,
       0,
   });
 }
@@ -109,7 +125,7 @@ void NitroSync::enqueueMutation(const std::string& id, const std::string& tableN
 std::vector<std::string> NitroSync::listPendingMutations(double limit) {
   const std::size_t safeLimit = static_cast<std::size_t>(std::max(0.0, std::floor(limit)));
   std::vector<std::string> serialized;
-  for (const Mutation& mutation : queue().claimPending(safeLimit)) {
+  for (const ::nitrosync::Mutation& mutation : queue().claimPending(safeLimit)) {
     serialized.push_back("{\"id\":" + quoteJson(mutation.id) +
                          ",\"tableName\":" + quoteJson(mutation.tableName) +
                          ",\"operation\":" + quoteJson(operationName(mutation.operation)) +
@@ -130,7 +146,7 @@ void NitroSync::deleteRecord(const std::string& tableName, const std::string& re
 std::vector<std::string> NitroSync::readRecords(const std::string& tableName) { return queue().readRecords(tableName); }
 std::vector<std::string> NitroSync::readTombstones(const std::string& tableName) {
   std::vector<std::string> serialized;
-  for (const Tombstone& tombstone : queue().readTombstones(tableName)) {
+  for (const ::nitrosync::Tombstone& tombstone : queue().readTombstones(tableName)) {
     serialized.push_back("{\"id\":" + quoteJson(tombstone.recordId) +
                          ",\"timestamp\":" + std::to_string(tombstone.timestamp) + "}");
   }
@@ -140,12 +156,4 @@ void NitroSync::clearTombstone(const std::string& tableName, const std::string& 
   queue().clearTombstone(tableName, recordId, static_cast<std::int64_t>(throughTimestamp));
 }
 
-namespace {
-const bool registered = [] {
-  margelo::nitro::HybridObjectRegistry::registerHybridObjectConstructor(
-      "NitroSync", [] { return std::make_shared<NitroSync>(); });
-  return true;
-}();
-}  // namespace
-
-}  // namespace nitrosync
+}
