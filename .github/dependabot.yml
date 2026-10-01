@@ -27,15 +27,16 @@ updates:
       # rompere la toolchain di build (react-native-builder-bob/Jest).
       - dependency-name: "@babel/core"
         update-types: ["version-update:semver-major"]
-      # react e @types/react seguono il peerDependency range dichiarato dalla
-      # versione di react-native in uso (attualmente react-native@0.86.x
-      # richiede react/@types/react ^19.x): un major bump indipendente rompe
-      # `npm ci` (ERESOLVE) finché react-native non aggiorna a sua volta il
-      # proprio peer range.
+      # react, @types/react e react-native sono pinnati esatti (senza caret)
+      # e allineati alla versione bundle di Expo SDK 57: un bump indipendente,
+      # anche minor, rompe quell'allineamento, com'è già successo con il bump
+      # di react-native a 0.87.1 (poi ripinnato a 0.86.3).
       - dependency-name: "react"
-        update-types: ["version-update:semver-major"]
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
       - dependency-name: "@types/react"
-        update-types: ["version-update:semver-major"]
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "react-native"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
 
   - package-ecosystem: npm
     directory: "/example"
@@ -46,10 +47,13 @@ updates:
       # Mantiene l'app di esempio stabile senza rompere il framework Expo/RN
       - dependency-name: "expo*"
         update-types: ["version-update:semver-major"]
+      # react e react-native sono pinnati esatti e allineati a Expo SDK 57
+      # (stesso vincolo del root): un bump indipendente, anche minor, rompe
+      # quell'allineamento.
       - dependency-name: "react-native"
-        update-types: ["version-update:semver-major"]
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
       - dependency-name: "react"
-        update-types: ["version-update:semver-major"]
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
       # react-native-mmkv e react-native-nitro-modules sono dipendenze
       # native strettamente accoppiate alla versione usata nella libreria
       # principale: un major bump può introdurre API incompatibili con il
