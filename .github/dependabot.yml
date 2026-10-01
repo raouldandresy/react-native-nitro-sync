@@ -6,12 +6,17 @@ updates:
       interval: weekly
     open-pull-requests-limit: 5
     ignore:
-      # react-native-nitro-modules e react-native-builder-bob sono ancora in
-      # versione 0.x: per semver un bump "minor" (0.25 -> 0.37) NON viene
-      # classificato come "semver-major" (il major resta 0), quindi va
+      # react-native-nitro-modules, nitrogen e react-native-builder-bob sono
+      # ancora in versione 0.x: per semver un bump "minor" (0.25 -> 0.37) NON
+      # viene classificato come "semver-major" (il major resta 0), quindi va
       # ignorato esplicitamente anche il minor per ottenere lo stesso effetto
       # di protezione da breaking change che si avrebbe su un pacchetto >=1.0.
+      # nitrogen (codegen) e react-native-nitro-modules (runtime) sono inoltre
+      # pinnati sulla stessa 0.36.x: devono restare allineati, altrimenti i
+      # binding generati rischiano di non corrispondere al runtime installato.
       - dependency-name: "react-native-nitro-modules"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "nitrogen"
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
       - dependency-name: "react-native-builder-bob"
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
