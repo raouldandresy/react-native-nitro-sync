@@ -59,7 +59,14 @@ jobs:
           java-version: 17
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        # v3's default packages list ("tools platform-tools") installs the
+        # legacy `tools` package, which Google stopped serving in September
+        # 2026 (android-actions/setup-android#537). v4 fixes this upstream;
+        # pin platform-tools explicitly as the extra safety net it
+        # recommends.
+        uses: android-actions/setup-android@v4
+        with:
+          packages: "platform-tools"
 
       - name: Install package dependencies
         run: npm ci
