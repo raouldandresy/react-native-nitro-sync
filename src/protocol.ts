@@ -1,4 +1,10 @@
-import type { SyncMutation, SyncRecord, SyncTransportRequest, SyncTransportResponse } from './types';
+import type {
+  SyncMutation,
+  SyncRecord,
+  SyncSchemaMigration,
+  SyncTransportRequest,
+  SyncTransportResponse,
+} from './types';
 
 export const SYNC_PROTOCOL_VERSION = 1;
 
@@ -9,7 +15,22 @@ export function buildSyncRequestPayload(
   serverCursor?: string | null,
   serverVersion?: number | null,
   deviceId?: string,
+  schemaVersion?: number,
+  migration?: SyncSchemaMigration | null,
 ): SyncTransportRequest {
+  if (schemaVersion !== undefined &&
+    (!Number.isSafeInteger(schemaVersion) || schemaVersion <= 0)) {
+    throw new Error('Invalid application schemaVersion: expected a positive safe integer');
+  }
+  if (migration !== undefined && migration !== null) {
+    if (schemaVersion === undefined) {
+      throw new Error('Invalid schema migration metadata: schemaVersion is required');
+    }
+    validateSchemaMigration(migration);
+    if (migration.fromVersion >= schemaVersion) {
+      throw new Error('Invalid schema migration metadata: fromVersion must be older than schemaVersion');
+    }
+  }
   return {
     protocolVersion: SYNC_PROTOCOL_VERSION,
     tableName,
@@ -18,17 +39,51 @@ export function buildSyncRequestPayload(
     ...(deviceId === undefined ? {} : { deviceId }),
     ...(serverCursor === undefined ? {} : { serverCursor }),
     ...(serverVersion === undefined ? {} : { serverVersion }),
+    ...(schemaVersion === undefined ? {} : { schemaVersion }),
+    ...(migration === undefined ? {} : { migration }),
   };
+}
+
+export function assertCompatibleSchemaVersion(
+  schemaVersion: number,
+  minimumSchemaVersion: number | undefined,
+): void {
+  if (
+    !Number.isSafeInteger(schemaVersion) ||
+    schemaVersion <= 0
+  ) {
+    throw new Error('Invalid application schemaVersion: expected a positive safe integer');
+  }
+  if (minimumSchemaVersion !== undefined && schemaVersion < minimumSchemaVersion) {
+    throw new Error(
+      `Unsupported application schema version ${schemaVersion}; server requires ${minimumSchemaVersion}`,
+    );
+  }
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function validateSchemaMigration(migration: SyncSchemaMigration): void {
+  if (
+    !Number.isSafeInteger(migration.fromVersion) ||
+    migration.fromVersion <= 0 ||
+    !Array.isArray(migration.tables) ||
+    migration.tables.some((table) => typeof table !== 'string') ||
+    !isObject(migration.columns) ||
+    Object.entries(migration.columns).some(([, columns]) => (
+      !Array.isArray(columns) || columns.some((column) => typeof column !== 'string')
+    ))
+  ) {
+    throw new Error('Invalid schema migration metadata');
+  }
+}
+
 export function normalizeSyncResponse<T extends SyncRecord>(
   value: unknown,
 ): Required<Pick<SyncTransportResponse<T>, 'protocolVersion' | 'acknowledgedMutationIds' | 'serverTimestamp' | 'tombstones' | 'rejectedMutations'>>
-  & Pick<SyncTransportResponse<T>, 'records' | 'serverCursor' | 'serverVersion' | 'resetRequired'> {
+  & Pick<SyncTransportResponse<T>, 'records' | 'serverCursor' | 'serverVersion' | 'resetRequired' | 'minimumSchemaVersion'> {
   if (!isObject(value)) {
     throw new Error('Invalid sync response: expected an object');
   }
@@ -38,6 +93,14 @@ export function normalizeSyncResponse<T extends SyncRecord>(
     typeof response.resetRequired !== 'boolean'
   ) {
     throw new Error('Invalid sync response: resetRequired must be a boolean');
+  }
+  if (
+    response.minimumSchemaVersion !== undefined &&
+    (typeof response.minimumSchemaVersion !== 'number' ||
+      !Number.isSafeInteger(response.minimumSchemaVersion) ||
+      response.minimumSchemaVersion <= 0)
+  ) {
+    throw new Error('Invalid sync response: minimumSchemaVersion must be a positive safe integer');
   }
   if (response.resetRequired === true && response.records === undefined) {
     throw new Error('Invalid sync response: resetRequired requires records');
@@ -110,6 +173,9 @@ export function normalizeSyncResponse<T extends SyncRecord>(
   return {
     protocolVersion: SYNC_PROTOCOL_VERSION,
     ...(response.resetRequired === true ? { resetRequired: true } : {}),
+    ...(response.minimumSchemaVersion === undefined
+      ? {}
+      : { minimumSchemaVersion: response.minimumSchemaVersion as number }),
     records: response.records as readonly T[] | undefined,
     tombstones: (response.tombstones as SyncTransportResponse<T>['tombstones']) ?? [],
     acknowledgedMutationIds: (response.acknowledgedMutationIds as readonly string[] | undefined) ?? [],

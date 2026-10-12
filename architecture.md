@@ -57,6 +57,12 @@ The queue stores `CREATE`, `UPDATE`, and `DELETE` mutations with timestamp and s
 5. Acknowledged mutations are removed, permanent rejections are marked `REJECTED`, and unacknowledged/retryable mutations are marked `FAILED`.
 6. The response's cursor/version and the latest sync timestamp are persisted for later requests.
 
+The request may also include the application data `schemaVersion` and a
+`schemaMigration` manifest describing the previous version and added tables/columns.
+This is independent from the internal SQLite queue migration version. A server may
+return `minimumSchemaVersion`; clients below that version fail the table sync without
+settling mutations, leaving them retryable after the app is upgraded.
+
 If the server returns `resetRequired: true`, the response must contain a complete table
 snapshot. The provider removes stale local rows, preserves unacknowledged optimistic
 mutations and their delete tombstones, atomically replaces the table snapshot, and only

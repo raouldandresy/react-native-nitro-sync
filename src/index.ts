@@ -3,7 +3,11 @@ export { useSyncCollection } from './hooks/useSyncCollection';
 export { benchmarkNativeSyncQueue } from './benchmark';
 export type { SyncQueueBenchmarkResult } from './benchmark';
 export { SYNC_PROTOCOL_VERSION } from './protocol';
-export { buildSyncRequestPayload, normalizeSyncResponse } from './protocol';
+export {
+  assertCompatibleSchemaVersion,
+  buildSyncRequestPayload,
+  normalizeSyncResponse,
+} from './protocol';
 export { isRetryableState, transitionMutationState } from './stateMachine';
 export { createDeviceId, createSyncStorage } from './storage';
 export type { NitroSyncProviderProps } from './provider';
@@ -16,6 +20,7 @@ export type {
   SyncConflictResolver,
   SyncConflictStrategy,
   SyncMutation,
+  SyncSchemaMigration,
   SyncMutationRejection,
   SyncRecord,
   SyncStatus,

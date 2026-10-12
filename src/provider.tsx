@@ -11,7 +11,11 @@ import {
 } from './merge';
 import { failSyncMutations, partitionSyncMutations, settleSyncMutations } from './mutationSettlement';
 import { getNitroSync, getNitroSyncCreationError } from './native';
-import { buildSyncRequestPayload, normalizeSyncResponse } from './protocol';
+import {
+  assertCompatibleSchemaVersion,
+  buildSyncRequestPayload,
+  normalizeSyncResponse,
+} from './protocol';
 import { runSyncTableWorkers } from './tableWorkers';
 import {
   createDeviceId,
@@ -25,7 +29,14 @@ import {
   writeSyncServerCursor,
   writeSyncServerVersion,
 } from './storage';
-import type { NitroSyncConfig, SyncMutation, SyncRecord, SyncStatus, SyncTransport } from './types';
+import type {
+  NitroSyncConfig,
+  SyncMutation,
+  SyncRecord,
+  SyncSchemaMigration,
+  SyncStatus,
+  SyncTransport,
+} from './types';
 import type { RejectedSyncMutation } from './storage';
 
 export interface NitroSyncProviderProps {
@@ -45,6 +56,8 @@ function createConfiguredTransport(config: NitroSyncConfig): SyncTransport | und
       serverCursor?: string | null,
       serverVersion?: number | null,
       deviceId?: string,
+      schemaVersion?: number,
+      migration?: SyncSchemaMigration | null,
     ) {
   const response = await fetch(config.endpoint as string, {
     method: 'POST',
@@ -59,6 +72,8 @@ function createConfiguredTransport(config: NitroSyncConfig): SyncTransport | und
       serverCursor,
       serverVersion,
       deviceId,
+      schemaVersion,
+      migration,
     )),
   });
   if (!response.ok) {
@@ -67,6 +82,7 @@ function createConfiguredTransport(config: NitroSyncConfig): SyncTransport | und
   return await response.json() as {
     readonly protocolVersion?: number;
     readonly resetRequired?: boolean;
+    readonly minimumSchemaVersion?: number;
     readonly records?: readonly T[];
     readonly tombstones?: readonly { readonly id: string; readonly timestamp: number }[];
     readonly acknowledgedMutationIds?: readonly string[];
@@ -293,7 +309,13 @@ export function NitroSyncProvider({ config, children }: NitroSyncProviderProps):
               serverCursor,
               serverVersion,
               deviceIdRef.current,
+              config.schemaVersion,
+              config.schemaMigration,
             ));
+            assertCompatibleSchemaVersion(
+              config.schemaVersion ?? 1,
+              response.minimumSchemaVersion,
+            );
             const settlement = partitionSyncMutations(
               tableMutations,
               response.acknowledgedMutationIds ?? [],

@@ -32,9 +32,16 @@ export interface SyncMutation<T extends JsonObject = JsonObject> {
   readonly schemaVersion?: number;
 }
 
+export interface SyncSchemaMigration {
+  readonly fromVersion: number;
+  readonly tables: readonly string[];
+  readonly columns: Readonly<Record<string, readonly string[]>>;
+}
+
 export interface SyncTransportResponse<T extends SyncRecord = SyncRecord> {
   readonly protocolVersion?: number;
   readonly resetRequired?: boolean;
+  readonly minimumSchemaVersion?: number;
   readonly records?: readonly T[];
   readonly tombstones?: readonly SyncTombstone[];
   readonly acknowledgedMutationIds?: readonly string[];
@@ -42,6 +49,8 @@ export interface SyncTransportResponse<T extends SyncRecord = SyncRecord> {
   readonly serverTimestamp?: number;
   readonly serverCursor?: string | null;
   readonly serverVersion?: number | null;
+  readonly schemaVersion?: number;
+  readonly migration?: SyncSchemaMigration | null;
 }
 
 export interface SyncTransportRequest {
@@ -52,6 +61,8 @@ export interface SyncTransportRequest {
   readonly lastSyncedAt: number | null;
   readonly serverCursor?: string | null;
   readonly serverVersion?: number | null;
+  readonly schemaVersion?: number;
+  readonly migration?: SyncSchemaMigration | null;
 }
 
 export interface SyncTransport {
@@ -62,6 +73,8 @@ export interface SyncTransport {
     serverCursor?: string | null,
     serverVersion?: number | null,
     deviceId?: string,
+    schemaVersion?: number,
+    migration?: SyncSchemaMigration | null,
   ): Promise<SyncTransportResponse<T>>;
 }
 
@@ -96,6 +109,8 @@ export interface NitroSyncConfig {
   readonly deviceId?: string;
   readonly conflictStrategy?: SyncConflictStrategy | SyncConflictResolver;
   readonly schemaVersions?: Readonly<Record<string, number>>;
+  readonly schemaVersion?: number;
+  readonly schemaMigration?: SyncSchemaMigration;
 }
 
 export type SyncStatus = 'idle' | 'syncing' | 'error';

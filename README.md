@@ -19,6 +19,7 @@ For component responsibilities, persistence, native registration, and outstandin
 - Nitro C++ queue plus a TypeScript/OP-SQLite storage adapter and MMKV-compatible metadata storage.
 - Versioned client/server request and response contract (`protocolVersion: 1`), per-table cursors, acknowledgements, and permanent/retryable rejections.
 - Replacement sync for authoritative per-table snapshots when incremental cursors must be discarded.
+- Application data schema version and migration metadata in the transport handshake.
 - Configurable record merge strategies and persisted delete tombstones.
 - Expo config plugin and native background entry points; execution is subject to operating-system scheduling and host-app integration.
 - An Expo Router example with Notes, Tasks, Sync, and Guide screens using an in-memory mock transport.
@@ -188,6 +189,23 @@ export function TodoList() {
 ## Transport contract
 
 The `SyncTransport` receives a batch for one table at a time. The request includes `protocolVersion: 1`, `tableName`, `deviceId`, `mutations`, `lastSyncedAt`, and optional per-table `serverCursor` and `serverVersion`. Each mutation has an immutable ID, operation, payload, timestamp, and `schemaVersion` (default `1`, configurable using `config.schemaVersions`).
+
+Application data migrations are separate from the internal queue schema. Set
+`config.schemaVersion` to the installed app-data version and optionally provide
+`config.schemaMigration` with the previous version, added tables, and added columns:
+
+```ts
+schemaVersion: 4,
+schemaMigration: {
+  fromVersion: 3,
+  tables: ["todos"],
+  columns: { todos: ["archived"] },
+},
+```
+
+The backend can return `minimumSchemaVersion` when an older client cannot safely
+participate. The provider leaves the claimed mutations retryable and reports an error
+until the app is upgraded. Missing schema fields remain backward-compatible.
 
 An example successful response:
 

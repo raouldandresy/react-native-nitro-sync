@@ -1,4 +1,8 @@
-import { buildSyncRequestPayload, normalizeSyncResponse } from './protocol';
+import {
+  assertCompatibleSchemaVersion,
+  buildSyncRequestPayload,
+  normalizeSyncResponse,
+} from './protocol';
 
 describe('sync protocol helpers', () => {
   it('serializes the server cursor and version into the payload', () => {
@@ -27,6 +31,63 @@ describe('sync protocol helpers', () => {
       serverVersion: 99,
       deviceId: 'device-7',
     });
+
+  });
+
+  it('serializes application schema and migration metadata', () => {
+    expect(buildSyncRequestPayload(
+      'todos',
+      [],
+      null,
+      null,
+      null,
+      'device-7',
+      4,
+      {
+        fromVersion: 3,
+        tables: ['todos'],
+        columns: { todos: ['archived'] },
+      },
+    )).toMatchObject({
+      schemaVersion: 4,
+      migration: {
+        fromVersion: 3,
+        tables: ['todos'],
+        columns: { todos: ['archived'] },
+      },
+    });
+    expect(() => buildSyncRequestPayload('todos', [], null, undefined, undefined, undefined, 0))
+      .toThrow('schemaVersion');
+    expect(() => buildSyncRequestPayload(
+      'todos',
+      [],
+      null,
+      undefined,
+      undefined,
+      undefined,
+      4,
+      { fromVersion: 3, tables: ['todos'], columns: { todos: [1] as never } },
+    )).toThrow('schema migration');
+    expect(() => buildSyncRequestPayload(
+      'todos',
+      [],
+      null,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { fromVersion: 3, tables: ['todos'], columns: {} },
+    )).toThrow('schemaVersion is required');
+    expect(() => buildSyncRequestPayload(
+      'todos',
+      [],
+      null,
+      undefined,
+      undefined,
+      undefined,
+      3,
+      { fromVersion: 3, tables: ['todos'], columns: {} },
+    )).toThrow('fromVersion must be older');
   });
 
   it('normalizes the response contract with explicit cursor and version metadata', () => {
@@ -72,10 +133,28 @@ describe('sync protocol helpers', () => {
       records: [{ id: 'todo-1', title: 'restored' }],
       serverCursor: 'replacement-cursor',
     });
+
     expect(() => normalizeSyncResponse({ resetRequired: true }))
       .toThrow('resetRequired requires records');
     expect(() => normalizeSyncResponse({ resetRequired: 'yes' }))
       .toThrow('resetRequired must be a boolean');
+  });
+
+  it('validates a server minimum application schema version', () => {
+    expect(normalizeSyncResponse({
+      records: [],
+      minimumSchemaVersion: 3,
+    })).toMatchObject({ minimumSchemaVersion: 3 });
+    expect(() => normalizeSyncResponse({ minimumSchemaVersion: 0 }))
+      .toThrow('minimumSchemaVersion');
+  });
+
+  it('fails incompatible application schema versions before settlement', () => {
+    expect(() => assertCompatibleSchemaVersion(2, 3))
+      .toThrow('server requires 3');
+    expect(() => assertCompatibleSchemaVersion(3, 3)).not.toThrow();
+    expect(() => assertCompatibleSchemaVersion(0, undefined))
+      .toThrow('positive safe integer');
   });
 
   it('rejects malformed response acknowledgements and tombstones explicitly', () => {
