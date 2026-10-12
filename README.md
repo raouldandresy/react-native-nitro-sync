@@ -123,6 +123,7 @@ export function AppRoot({ children }: PropsWithChildren) {
         metadataStore,
         transport,
         pollingIntervalMs: 15_000,
+        maxConcurrentTables: 4,
         conflictStrategy: "last-write-wins",
         schemaVersions: { todos: 1 },
       }}
@@ -132,6 +133,11 @@ export function AppRoot({ children }: PropsWithChildren) {
   );
 }
 ```
+
+When a sync includes multiple tables, independent table requests run concurrently. Set
+`maxConcurrentTables` to bound transport and backend load; table cursors and mutation
+settlement remain isolated, and a failed table remains retryable without discarding
+successful table results. Overlapping `refresh()` calls are serialized by the provider.
 
 Use the collection hook from a descendant of the provider:
 

@@ -86,6 +86,7 @@ export interface NitroSyncConfig {
   readonly endpoint?: string;
   readonly authToken?: string;
   readonly pollingIntervalMs?: number;
+  readonly maxConcurrentTables?: number;
   readonly transport?: SyncTransport;
   readonly nativeEngine?: NitroSync;
   readonly storage?: SyncStorage;

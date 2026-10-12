@@ -12,6 +12,7 @@ import {
 import { failSyncMutations, partitionSyncMutations, settleSyncMutations } from './mutationSettlement';
 import { getNitroSync, getNitroSyncCreationError } from './native';
 import { buildSyncRequestPayload, normalizeSyncResponse } from './protocol';
+import { runSyncTableWorkers } from './tableWorkers';
 import {
   createDeviceId,
   createSyncStorage,
@@ -246,34 +247,37 @@ export function NitroSyncProvider({ config, children }: NitroSyncProviderProps):
           ? [...new Set([...Object.keys(recordsRef.current), ...grouped.keys()])]
           : [requestedTableName];
 
-        for (const tableName of tables) {
-          if (recordsRef.current[tableName] === undefined) {
-            const storedRecords = loadStoredRecords(tableName);
-            setRecords((current) => ({ ...current, [tableName]: storedRecords }));
-            recordsRef.current = { ...recordsRef.current, [tableName]: storedRecords };
-          }
-          const mutations = grouped.get(tableName) ?? [];
-          const serverCursor = serverCursorsRef.current.has(tableName)
-            ? serverCursorsRef.current.get(tableName) ?? null
-            : storage?.getServerCursor(tableName) ?? readSyncServerCursor(config.metadataStore, tableName);
-          const serverVersion = serverVersionsRef.current.has(tableName)
-            ? serverVersionsRef.current.get(tableName) ?? null
-            : storage?.getServerVersion(tableName) ?? readSyncServerVersion(config.metadataStore, tableName);
-          const response = normalizeSyncResponse(await transport.pushAndPull<SyncRecord>(
-            tableName,
-            mutations,
-            lastSyncedAtRef.current,
-            serverCursor,
-            serverVersion,
-            deviceIdRef.current,
-          ));
-          const settlement = partitionSyncMutations(
-            mutations,
-            response.acknowledgedMutationIds ?? [],
-            response.rejectedMutations ?? [],
-          );
+        const concurrency = config.maxConcurrentTables ?? 4;
+
+        const processTable = async (tableName: string): Promise<Error | null> => {
+          const tableMutations = grouped.get(tableName) ?? [];
+          try {
+            if (recordsRef.current[tableName] === undefined) {
+              const storedRecords = loadStoredRecords(tableName);
+              setRecords((current) => ({ ...current, [tableName]: storedRecords }));
+              recordsRef.current = { ...recordsRef.current, [tableName]: storedRecords };
+            }
+            const serverCursor = serverCursorsRef.current.has(tableName)
+              ? serverCursorsRef.current.get(tableName) ?? null
+              : storage?.getServerCursor(tableName) ?? readSyncServerCursor(config.metadataStore, tableName);
+            const serverVersion = serverVersionsRef.current.has(tableName)
+              ? serverVersionsRef.current.get(tableName) ?? null
+              : storage?.getServerVersion(tableName) ?? readSyncServerVersion(config.metadataStore, tableName);
+            const response = normalizeSyncResponse(await transport.pushAndPull<SyncRecord>(
+              tableName,
+              tableMutations,
+              lastSyncedAtRef.current,
+              serverCursor,
+              serverVersion,
+              deviceIdRef.current,
+            ));
+            const settlement = partitionSyncMutations(
+              tableMutations,
+              response.acknowledgedMutationIds ?? [],
+              response.rejectedMutations ?? [],
+            );
             const acknowledged = new Set(settlement.acknowledged.map((mutation) => mutation.id));
-          const unacked = mutations.filter((mutation) => !acknowledged.has(mutation.id));
+            const unacked = tableMutations.filter((mutation) => !acknowledged.has(mutation.id));
           const serverRecords = response.records;
           const serverTimestamp = response.serverTimestamp ?? Date.now();
           const localTombstones = loadStoredTombstones(tableName);
@@ -379,6 +383,23 @@ export function NitroSyncProvider({ config, children }: NitroSyncProviderProps):
           if (rejectionErrors.length > 0) {
             rejectionMessages.push(...rejectionErrors);
           }
+            return null;
+          } catch (caughtError) {
+            failSyncMutations(
+              tableMutations.filter((mutation) => unackedIds.has(mutation.id)),
+              (mutation) => markFailed(mutation.id),
+            );
+            return caughtError instanceof Error ? caughtError : new Error(
+              `Synchronization failed for table "${tableName}"`,
+            );
+          }
+        };
+
+        const tableErrors = await runSyncTableWorkers(tables, concurrency, processTable);
+        if (tableErrors.length > 0) {
+          throw new Error(
+            `One or more tables failed to synchronize: ${tableErrors.map((error) => error.message).join('; ')}`,
+          );
         }
         if (rejectionMessages.length > 0) {
           setError(new Error(`Server rejected mutations: ${rejectionMessages.join('; ')}`));

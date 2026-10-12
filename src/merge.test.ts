@@ -176,4 +176,31 @@ describe('mergePulledRecords', () => {
     );
     expect(merged).toEqual([]);
   });
+
+  it('keeps an offline edit protected while another device deletes the record', () => {
+    const mutation: SyncMutation = {
+      id: 'edit-after-delete',
+      tableName: 'todos',
+      operation: 'UPDATE',
+      payload: { id: 'shared-1', title: 'offline edit', updatedAt: 12 },
+      timestamp: 12,
+    };
+    expect(mergePulledRecords(
+      [{ id: 'shared-1', title: 'offline edit', updatedAt: 12 }],
+      [],
+      [mutation],
+      'last-write-wins',
+      [{ id: 'shared-1', timestamp: 13 }],
+    )).toEqual([{ id: 'shared-1', title: 'offline edit', updatedAt: 12 }]);
+  });
+
+  it('applies a remote delete when the local device has no unacknowledged edit', () => {
+    expect(mergePulledRecords(
+      [{ id: 'shared-2', title: 'local copy', updatedAt: 10 }],
+      [],
+      [],
+      'last-write-wins',
+      [{ id: 'shared-2', timestamp: 11 }],
+    )).toEqual([]);
+  });
 });

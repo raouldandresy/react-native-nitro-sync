@@ -1,4 +1,5 @@
 import { createSyncStorage } from './storage';
+import { partitionSyncMutations, settleSyncMutations } from './mutationSettlement';
 import type { SyncSqliteDatabase, SyncMetadataStore } from './storage';
 
 function createMemoryMetadataStore(): SyncMetadataStore {
@@ -310,6 +311,45 @@ describe('createSyncStorage idempotent mutation recovery', () => {
     const recovered = restartedStorage.listPendingMutations(10);
 
     expect(recovered).toEqual(inFlightBeforeCrash);
+  });
+
+  it('resends the same mutation after a crash after server acknowledgement', () => {
+    const database = createMemoryDatabase();
+    const firstStorage = createSyncStorage(database);
+    firstStorage.initialize();
+    const mutation = {
+      id: 'mutation-acked-before-crash',
+      tableName: 'todos',
+      operation: 'CREATE' as const,
+      payload: { id: 'todo-acked', title: 'survives restart' },
+      timestamp: 250,
+      schemaVersion: 3,
+    };
+    firstStorage.applyMutation(mutation, mutation.payload, false);
+
+    const sentBeforeCrash = firstStorage.listPendingMutations(10);
+    expect(sentBeforeCrash).toEqual([mutation]);
+
+    const restartedStorage = createSyncStorage(database);
+    restartedStorage.initialize();
+    expect(restartedStorage.listPendingMutations(10)).toEqual(sentBeforeCrash);
+    expect(restartedStorage.loadRecords('todos')).toEqual([mutation.payload]);
+
+    const duplicateAck = partitionSyncMutations(
+      sentBeforeCrash,
+      [mutation.id],
+    );
+    settleSyncMutations(duplicateAck, {
+      acknowledge: (ackedMutation) => restartedStorage.removeMutation(ackedMutation.id),
+      retry: () => {
+        throw new Error('duplicate acknowledgement must not retry the mutation');
+      },
+      reject: () => {
+        throw new Error('duplicate acknowledgement must not reject the mutation');
+      },
+    });
+    expect(restartedStorage.listPendingMutations(10)).toEqual([]);
+    expect(restartedStorage.loadRecords('todos')).toEqual([mutation.payload]);
   });
 
   it('runs the pending schema migration from version 1 and rejects a future schema version', () => {
