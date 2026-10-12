@@ -27,8 +27,8 @@ class NitroSync final : public HybridNitroSyncSpec {
   NitroSync() : HybridObject(TAG) {}
 
   void initialize(const std::string& databasePath) override;
-  void applyMutation(const std::string& id, const std::string& tableName, MutationOperation operation, const std::string& payload, double timestamp, double schemaVersion, const std::string& recordId, const std::string& recordPayload, bool deleted) override;
-  void enqueueMutation(const std::string& id, const std::string& tableName, MutationOperation operation, const std::string& payload, double timestamp, double schemaVersion) override;
+  void applyMutation(const std::string& id, const std::string& tableName, MutationOperation operation, const std::string& payload, double timestamp, double schemaVersion, const std::string& recordId, const std::string& recordPayload, bool deleted, const std::string& dependsOn) override;
+  void enqueueMutation(const std::string& id, const std::string& tableName, MutationOperation operation, const std::string& payload, double timestamp, double schemaVersion, const std::string& dependsOn) override;
   std::vector<std::string> listPendingMutations(double limit) override;
   std::vector<std::string> listPendingMutationsForTable(const std::string& tableName, double limit) override;
   std::vector<std::string> listRejectedMutations(const std::string& tableName) override;
@@ -41,6 +41,7 @@ class NitroSync final : public HybridNitroSyncSpec {
   void removeMutation(const std::string& id) override;
   void upsertRecord(const std::string& tableName, const std::string& recordId, const std::string& payload, double timestamp) override;
   void deleteRecord(const std::string& tableName, const std::string& recordId, double timestamp) override;
+  void remapRecordId(const std::string& tableName, const std::string& fromId, const std::string& toId) override;
   void replaceTable(const std::string& tableName, const std::vector<std::string>& records, const std::vector<std::string>& tombstones, double timestamp) override;
   std::vector<std::string> readRecords(const std::string& tableName) override;
   std::vector<std::string> readTombstones(const std::string& tableName) override;

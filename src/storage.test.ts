@@ -359,11 +359,11 @@ describe('createSyncStorage idempotent mutation recovery', () => {
   it('runs the pending schema migration from version 1 and rejects a future schema version', () => {
     const olderDatabase = createMemoryDatabase(1);
     createSyncStorage(olderDatabase).initialize();
-    expect(olderDatabase.getUserVersion()).toBe(5);
+    expect(olderDatabase.getUserVersion()).toBe(6);
 
-    const newerDatabase = createMemoryDatabase(6);
+    const newerDatabase = createMemoryDatabase(7);
     expect(() => createSyncStorage(newerDatabase).initialize())
-      .toThrow('newer than supported version 5');
+      .toThrow('newer than supported version 6');
   });
 
   it('migrates an existing queue row without losing retry state or payload', () => {

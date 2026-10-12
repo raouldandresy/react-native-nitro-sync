@@ -69,6 +69,7 @@ export async function benchmarkNativeSyncQueue(
         payload,
         Date.now(),
         1,
+        '[]',
       );
       enqueueMs += now() - enqueueStartedAt;
 

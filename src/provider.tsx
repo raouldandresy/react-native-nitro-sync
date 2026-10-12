@@ -282,6 +282,23 @@ export function NitroSyncProvider({ config, children }: NitroSyncProviderProps):
         }
 
         const grouped = groupMutationsByTable(claimed);
+        const claimedIds = new Set(claimed.map((mutation) => mutation.id));
+        const blockedIds = new Set(
+          claimed
+            .filter((mutation) => mutation.dependsOn?.some((dependency) => claimedIds.has(dependency)))
+            .map((mutation) => mutation.id),
+        );
+        for (const mutationId of blockedIds) {
+          if (usesNative) {
+            nativeEngine.markMutationPending(mutationId);
+          } else {
+            storage?.markMutationPending(mutationId);
+          }
+          unackedIds.delete(mutationId);
+        }
+        for (const [tableName, tableMutations] of grouped) {
+          grouped.set(tableName, tableMutations.filter((mutation) => !blockedIds.has(mutation.id)));
+        }
         const tables = requestedTableName === undefined
           ? [...new Set([...Object.keys(recordsRef.current), ...grouped.keys()])]
           : [requestedTableName];
@@ -312,6 +329,21 @@ export function NitroSyncProvider({ config, children }: NitroSyncProviderProps):
               config.schemaVersion,
               config.schemaMigration,
             ));
+            if (response.idMap !== undefined) {
+              let remappedRecords = recordsRef.current[tableName] ?? [];
+              for (const [fromId, toId] of Object.entries(response.idMap)) {
+                if (fromId === toId) continue;
+                if (usesNative) {
+                  nativeEngine.remapRecordId(tableName, fromId, toId);
+                } else {
+                  storage?.remapRecordId(tableName, fromId, toId);
+                }
+                remappedRecords = remappedRecords
+                  .map((record) => record.id === fromId ? { ...record, id: toId } : record);
+              }
+              recordsRef.current = { ...recordsRef.current, [tableName]: remappedRecords };
+              setRecords((current) => ({ ...current, [tableName]: remappedRecords }));
+            }
             assertCompatibleSchemaVersion(
               config.schemaVersion ?? 1,
               response.minimumSchemaVersion,
@@ -608,6 +640,7 @@ export function NitroSyncProvider({ config, children }: NitroSyncProviderProps):
       payload: queuePayload,
       timestamp,
       schemaVersion,
+      ...(mutation.dependsOn === undefined ? {} : { dependsOn: [...mutation.dependsOn] }),
     };
 
     if (usesNative) {
@@ -621,6 +654,7 @@ export function NitroSyncProvider({ config, children }: NitroSyncProviderProps):
         recordId,
         JSON.stringify(mutation.operation === 'DELETE' ? { id: recordId } : persistedRecord),
         mutation.operation === 'DELETE',
+        JSON.stringify(mutation.dependsOn ?? []),
       );
     } else if (storage !== null) {
       storage.applyMutation(

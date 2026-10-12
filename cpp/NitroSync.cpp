@@ -107,7 +107,8 @@ void NitroSync::applyMutation(
     double schemaVersion,
     const std::string& recordId,
     const std::string& recordPayload,
-    bool deleted) {
+    bool deleted,
+    const std::string& dependsOn) {
   queue().applyMutation(
       {id,
        tableName,
@@ -115,11 +116,13 @@ void NitroSync::applyMutation(
        payload,
        static_cast<std::int64_t>(timestamp),
        static_cast<std::int32_t>(schemaVersion),
+       dependsOn,
        ::nitrosync::MutationStatus::Pending,
        0},
       recordId,
       recordPayload,
-      deleted);
+      deleted,
+      dependsOn);
 }
 
 ::nitrosync::MutationQueue& NitroSync::queue() {
@@ -133,7 +136,8 @@ void NitroSync::enqueueMutation(
     MutationOperation operation,
     const std::string& payload,
     double timestamp,
-    double schemaVersion) {
+    double schemaVersion,
+    const std::string& dependsOn) {
   queue().enqueue({
       id,
       tableName,
@@ -141,6 +145,7 @@ void NitroSync::enqueueMutation(
       payload,
       static_cast<std::int64_t>(timestamp),
       static_cast<std::int32_t>(schemaVersion),
+      dependsOn,
       ::nitrosync::MutationStatus::Pending,
       0,
   });
@@ -155,7 +160,8 @@ std::vector<std::string> NitroSync::listPendingMutations(double limit) {
                          ",\"operation\":" + quoteJson(operationName(mutation.operation)) +
                          ",\"payload\":" + quoteJson(mutation.payload) +
                          ",\"timestamp\":" + std::to_string(mutation.timestamp) +
-                         ",\"schemaVersion\":" + std::to_string(mutation.schemaVersion) + "}");
+                         ",\"schemaVersion\":" + std::to_string(mutation.schemaVersion) +
+                         ",\"dependsOn\":" + quoteJson(mutation.dependsOn) + "}");
   }
   return serialized;
 }
@@ -171,7 +177,8 @@ std::vector<std::string> NitroSync::listPendingMutationsForTable(
                          ",\"operation\":" + quoteJson(operationName(mutation.operation)) +
                          ",\"payload\":" + quoteJson(mutation.payload) +
                          ",\"timestamp\":" + std::to_string(mutation.timestamp) +
-                         ",\"schemaVersion\":" + std::to_string(mutation.schemaVersion) + "}");
+                         ",\"schemaVersion\":" + std::to_string(mutation.schemaVersion) +
+                         ",\"dependsOn\":" + quoteJson(mutation.dependsOn) + "}");
   }
   return serialized;
 }
@@ -194,6 +201,7 @@ void NitroSync::discardRejectedMutation(const std::string& id) { queue().discard
 void NitroSync::removeMutation(const std::string& id) { queue().remove(id); }
 void NitroSync::upsertRecord(const std::string& tableName, const std::string& recordId, const std::string& payload, double timestamp) { queue().upsertRecord(tableName, recordId, payload, static_cast<std::int64_t>(timestamp)); }
 void NitroSync::deleteRecord(const std::string& tableName, const std::string& recordId, double timestamp) { queue().deleteRecord(tableName, recordId, static_cast<std::int64_t>(timestamp)); }
+void NitroSync::remapRecordId(const std::string& tableName, const std::string& fromId, const std::string& toId) { queue().remapRecordId(tableName, fromId, toId); }
 void NitroSync::replaceTable(const std::string& tableName, const std::vector<std::string>& records, const std::vector<std::string>& tombstones, double timestamp) { queue().replaceTable(tableName, records, tombstones, static_cast<std::int64_t>(timestamp)); }
 std::vector<std::string> NitroSync::readRecords(const std::string& tableName) { return queue().readRecords(tableName); }
 std::vector<std::string> NitroSync::readTombstones(const std::string& tableName) {

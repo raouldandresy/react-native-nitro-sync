@@ -29,6 +29,7 @@ namespace margelo::nitro::nitrosync {
       prototype.registerHybridMethod("removeMutation", &HybridNitroSyncSpec::removeMutation);
       prototype.registerHybridMethod("upsertRecord", &HybridNitroSyncSpec::upsertRecord);
       prototype.registerHybridMethod("deleteRecord", &HybridNitroSyncSpec::deleteRecord);
+      prototype.registerHybridMethod("remapRecordId", &HybridNitroSyncSpec::remapRecordId);
       prototype.registerHybridMethod("replaceTable", &HybridNitroSyncSpec::replaceTable);
       prototype.registerHybridMethod("readRecords", &HybridNitroSyncSpec::readRecords);
       prototype.registerHybridMethod("readTombstones", &HybridNitroSyncSpec::readTombstones);

@@ -30,6 +30,7 @@ export interface SyncMutation<T extends JsonObject = JsonObject> {
   readonly payload: T;
   readonly timestamp: number;
   readonly schemaVersion?: number;
+  readonly dependsOn?: readonly string[];
 }
 
 export interface SyncSchemaMigration {
@@ -51,6 +52,7 @@ export interface SyncTransportResponse<T extends SyncRecord = SyncRecord> {
   readonly serverVersion?: number | null;
   readonly schemaVersion?: number;
   readonly migration?: SyncSchemaMigration | null;
+  readonly idMap?: Readonly<Record<string, string>>;
 }
 
 export interface SyncTransportRequest {

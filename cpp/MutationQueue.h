@@ -22,6 +22,7 @@ struct Mutation {
   std::string payload;
   std::int64_t timestamp;
   std::int32_t schemaVersion;
+  std::string dependsOn;
   MutationStatus status;
   std::int32_t retryCount;
 };
@@ -44,7 +45,8 @@ class MutationQueue {
       const Mutation& mutation,
       const std::string& recordId,
       const std::string& recordPayload,
-      bool deleted);
+      bool deleted,
+      const std::string& dependsOn);
   void enqueue(const Mutation& mutation);
   std::vector<Mutation> claimPending(std::size_t limit, const std::optional<std::string>& tableName = std::nullopt);
   std::vector<std::string> listRejected(const std::string& tableName) const;
@@ -57,6 +59,7 @@ class MutationQueue {
   void remove(const std::string& id);
   void upsertRecord(const std::string& tableName, const std::string& recordId, const std::string& payload, std::int64_t timestamp);
   void deleteRecord(const std::string& tableName, const std::string& recordId, std::int64_t timestamp);
+  void remapRecordId(const std::string& tableName, const std::string& fromId, const std::string& toId);
   void replaceTable(
       const std::string& tableName,
       const std::vector<std::string>& records,

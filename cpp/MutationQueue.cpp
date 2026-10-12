@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS sync_queue (
   timestamp INTEGER NOT NULL,
   status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'SYNCING', 'FAILED', 'REJECTED')),
   retry_count INTEGER NOT NULL DEFAULT 0
+  ,depends_on TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(depends_on))
 );
 CREATE INDEX IF NOT EXISTS sync_queue_status_timestamp ON sync_queue(status, timestamp);
 CREATE TABLE IF NOT EXISTS sync_records (
@@ -33,7 +34,7 @@ CREATE TABLE IF NOT EXISTS sync_records (
   PRIMARY KEY (table_name, record_id)
 );
 )SQL";
-constexpr int kCurrentSchemaVersion = 5;
+constexpr int kCurrentSchemaVersion = 6;
 
 void checkSqlite(int result, sqlite3* database, const char* context) {
   if (result != SQLITE_OK && result != SQLITE_DONE && result != SQLITE_ROW) {
@@ -186,6 +187,17 @@ void MutationQueue::initialize() {
         throw;
       }
     }
+    if (schemaVersion < 6) {
+      execute("BEGIN IMMEDIATE TRANSACTION;");
+      try {
+        execute("ALTER TABLE sync_queue ADD COLUMN depends_on TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(depends_on));");
+        execute("PRAGMA user_version = 6;");
+        execute("COMMIT;");
+      } catch (...) {
+        try { execute("ROLLBACK;"); } catch (...) {}
+        throw;
+      }
+    }
     recoverSyncing();
   } catch (...) {
     sqlite3_close_v2(database_);
@@ -211,8 +223,8 @@ void MutationQueue::recoverSyncing() {
 void MutationQueue::enqueue(const Mutation& mutation) {
   std::lock_guard<std::mutex> lock(mutex_);
   const char* sql = "INSERT INTO sync_queue "
-                    "(id, table_name, operation, payload, timestamp, status, retry_count, schema_version) "
-                    "VALUES (?, ?, ?, ?, ?, 'PENDING', 0, ?) "
+                    "(id, table_name, operation, payload, timestamp, status, retry_count, schema_version, depends_on) "
+                    "VALUES (?, ?, ?, ?, ?, 'PENDING', 0, ?, ?) "
                     "ON CONFLICT(id) DO NOTHING";
   Statement statement = prepare(database_, sql, "Preparing enqueue");
   sqlite3_bind_text(statement.get(), 1, mutation.id.c_str(), -1, SQLITE_TRANSIENT);
@@ -221,6 +233,7 @@ void MutationQueue::enqueue(const Mutation& mutation) {
   sqlite3_bind_text(statement.get(), 4, mutation.payload.c_str(), -1, SQLITE_TRANSIENT);
   sqlite3_bind_int64(statement.get(), 5, mutation.timestamp);
   sqlite3_bind_int(statement.get(), 6, mutation.schemaVersion);
+  sqlite3_bind_text(statement.get(), 7, mutation.dependsOn.c_str(), -1, SQLITE_TRANSIENT);
   checkSqlite(sqlite3_step(statement.get()), database_, "Enqueue mutation");
 }
 
@@ -228,14 +241,15 @@ void MutationQueue::applyMutation(
     const Mutation& mutation,
     const std::string& recordId,
     const std::string& recordPayload,
-    bool deleted) {
+    bool deleted,
+    const std::string& dependsOn) {
   std::lock_guard<std::mutex> lock(mutex_);
   execute("BEGIN IMMEDIATE TRANSACTION;");
   try {
     Statement enqueueStatement = prepare(
         database_,
-        "INSERT INTO sync_queue (id, table_name, operation, payload, timestamp, status, retry_count, schema_version) "
-        "VALUES (?, ?, ?, ?, ?, 'PENDING', 0, ?) ON CONFLICT(id) DO NOTHING",
+        "INSERT INTO sync_queue (id, table_name, operation, payload, timestamp, status, retry_count, schema_version, depends_on) "
+        "VALUES (?, ?, ?, ?, ?, 'PENDING', 0, ?, ?) ON CONFLICT(id) DO NOTHING",
         "Preparing mutation apply");
     sqlite3_bind_text(enqueueStatement.get(), 1, mutation.id.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(enqueueStatement.get(), 2, mutation.tableName.c_str(), -1, SQLITE_TRANSIENT);
@@ -243,6 +257,7 @@ void MutationQueue::applyMutation(
     sqlite3_bind_text(enqueueStatement.get(), 4, mutation.payload.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_bind_int64(enqueueStatement.get(), 5, mutation.timestamp);
     sqlite3_bind_int(enqueueStatement.get(), 6, mutation.schemaVersion);
+    sqlite3_bind_text(enqueueStatement.get(), 7, dependsOn.c_str(), -1, SQLITE_TRANSIENT);
     checkSqlite(sqlite3_step(enqueueStatement.get()), database_, "Enqueueing mutation");
 
     const char* recordSql = deleted
@@ -276,11 +291,11 @@ std::vector<Mutation> MutationQueue::claimPending(
   execute("BEGIN IMMEDIATE TRANSACTION;");
   try {
     const char* selectSql = tableName.has_value()
-        ? "SELECT id, table_name, operation, payload, timestamp, schema_version, status, retry_count "
+        ?         "SELECT id, table_name, operation, payload, timestamp, schema_version, status, retry_count, depends_on "
           "FROM sync_queue WHERE status IN ('PENDING', 'FAILED') "
           "AND next_retry_at <= (strftime('%s', 'now') * 1000) AND table_name = ? "
           "ORDER BY timestamp ASC LIMIT ?"
-        : "SELECT id, table_name, operation, payload, timestamp, schema_version, status, retry_count "
+        :         "SELECT id, table_name, operation, payload, timestamp, schema_version, status, retry_count, depends_on "
           "FROM sync_queue WHERE status IN ('PENDING', 'FAILED') "
           "AND next_retry_at <= (strftime('%s', 'now') * 1000) "
           "ORDER BY timestamp ASC LIMIT ?";
@@ -306,6 +321,7 @@ std::vector<Mutation> MutationQueue::claimPending(
           columnText(statement.get(), 3),
           sqlite3_column_int64(statement.get(), 4),
           sqlite3_column_int(statement.get(), 5),
+          columnText(statement.get(), 8),
           statusFromSql(columnText(statement.get(), 6).c_str()),
           sqlite3_column_int(statement.get(), 7)});
     }
@@ -448,6 +464,41 @@ void MutationQueue::deleteRecord(const std::string& tableName, const std::string
   sqlite3_bind_text(statement.get(), 3, payload.c_str(), -1, SQLITE_TRANSIENT);
   sqlite3_bind_int64(statement.get(), 4, timestamp);
   checkSqlite(sqlite3_step(statement.get()), database_, "Deleting record");
+}
+
+void MutationQueue::remapRecordId(
+    const std::string& tableName,
+    const std::string& fromId,
+    const std::string& toId) {
+  if (fromId == toId) return;
+  std::lock_guard<std::mutex> lock(mutex_);
+  execute("BEGIN IMMEDIATE TRANSACTION;");
+  try {
+    Statement record = prepare(
+        database_,
+        "UPDATE sync_records SET record_id = ?, payload = json_set(payload, '$.id', ?) "
+        "WHERE table_name = ? AND record_id = ?",
+        "Preparing record ID remap");
+    sqlite3_bind_text(record.get(), 1, toId.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(record.get(), 2, toId.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(record.get(), 3, tableName.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(record.get(), 4, fromId.c_str(), -1, SQLITE_TRANSIENT);
+    checkSqlite(sqlite3_step(record.get()), database_, "Remapping record ID");
+
+    Statement mutations = prepare(
+        database_,
+        "UPDATE sync_queue SET payload = json_set(payload, '$.id', ?) "
+        "WHERE table_name = ? AND json_extract(payload, '$.id') = ?",
+        "Preparing mutation ID remap");
+    sqlite3_bind_text(mutations.get(), 1, toId.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(mutations.get(), 2, tableName.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(mutations.get(), 3, fromId.c_str(), -1, SQLITE_TRANSIENT);
+    checkSqlite(sqlite3_step(mutations.get()), database_, "Remapping mutation record ID");
+    execute("COMMIT;");
+  } catch (...) {
+    try { execute("ROLLBACK;"); } catch (...) {}
+    throw;
+  }
 }
 
 void MutationQueue::replaceTable(

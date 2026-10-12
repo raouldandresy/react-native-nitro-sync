@@ -40,6 +40,7 @@ export interface SyncStorage {
   readonly removeMutation: (id: string) => void;
   readonly saveRecord: (tableName: string, record: SyncRecord, timestamp: number) => void;
   readonly removeRecord: (tableName: string, recordId: string, timestamp: number) => void;
+  readonly remapRecordId: (tableName: string, fromId: string, toId: string) => void;
   readonly replaceTable?: (
     tableName: string,
     records: readonly SyncRecord[],
@@ -73,7 +74,8 @@ const QUEUE_SCHEMA = [
     payload TEXT NOT NULL CHECK (json_valid(payload)),
     timestamp INTEGER NOT NULL,
     status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'SYNCING', 'FAILED', 'REJECTED')),
-    retry_count INTEGER NOT NULL DEFAULT 0
+    retry_count INTEGER NOT NULL DEFAULT 0,
+    depends_on TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(depends_on))
   )`,
   'CREATE INDEX IF NOT EXISTS sync_queue_status_timestamp ON sync_queue(status, timestamp)',
   `CREATE TABLE IF NOT EXISTS sync_records (
@@ -90,7 +92,7 @@ const LAST_SYNCED_AT_KEY = 'nitro_sync.last_synced_at';
 const DEVICE_ID_KEY = 'nitro_sync.device_id';
 const SERVER_CURSOR_KEY = 'nitro_sync.server_cursor.';
 const SERVER_VERSION_KEY = 'nitro_sync.server_version.';
-const CURRENT_SCHEMA_VERSION = 5;
+const CURRENT_SCHEMA_VERSION = 6;
 const RETRY_DELAY_SQL = `CASE retry_count
   WHEN 0 THEN 1000
   WHEN 1 THEN 2000
@@ -237,6 +239,19 @@ export function createSyncStorage(
           database.executeSync('ROLLBACK');
           throw error;
         }
+        if (storedVersion < 6) {
+          database.executeSync('BEGIN IMMEDIATE TRANSACTION');
+          try {
+            database.executeSync(
+              "ALTER TABLE sync_queue ADD COLUMN depends_on TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(depends_on))",
+            );
+            database.executeSync('PRAGMA user_version = 6');
+            database.executeSync('COMMIT');
+          } catch (error) {
+            database.executeSync('ROLLBACK');
+            throw error;
+          }
+        }
       }
       database.executeSync("UPDATE sync_queue SET status = 'PENDING' WHERE status = 'SYNCING'");
     },
@@ -259,8 +274,8 @@ export function createSyncStorage(
     saveMutation: (mutation) => {
       database.executeSync(
         `INSERT INTO sync_queue
-          (id, table_name, operation, payload, timestamp, status, retry_count, schema_version)
-          VALUES (?, ?, ?, ?, ?, 'PENDING', 0, ?)
+          (id, table_name, operation, payload, timestamp, status, retry_count, schema_version, depends_on)
+          VALUES (?, ?, ?, ?, ?, 'PENDING', 0, ?, ?)
           ON CONFLICT(id) DO NOTHING`,
         [
           mutation.id,
@@ -269,6 +284,7 @@ export function createSyncStorage(
           JSON.stringify(mutation.payload),
           mutation.timestamp,
           mutation.schemaVersion ?? 1,
+          JSON.stringify(mutation.dependsOn ?? []),
         ],
       );
     },
@@ -277,8 +293,8 @@ export function createSyncStorage(
       try {
         database.executeSync(
           `INSERT INTO sync_queue
-            (id, table_name, operation, payload, timestamp, status, retry_count, schema_version)
-            VALUES (?, ?, ?, ?, ?, 'PENDING', 0, ?)
+            (id, table_name, operation, payload, timestamp, status, retry_count, schema_version, depends_on)
+            VALUES (?, ?, ?, ?, ?, 'PENDING', 0, ?, ?)
             ON CONFLICT(id) DO NOTHING`,
           [
             mutation.id,
@@ -287,6 +303,7 @@ export function createSyncStorage(
             JSON.stringify(mutation.payload),
             mutation.timestamp,
             mutation.schemaVersion ?? 1,
+            JSON.stringify(mutation.dependsOn ?? []),
           ],
         );
         if (deleted) {
@@ -318,7 +335,7 @@ export function createSyncStorage(
       database.executeSync('BEGIN IMMEDIATE TRANSACTION');
       try {
         const rows = rowsFrom(database.executeSync(
-          `SELECT id, table_name, operation, payload, timestamp, schema_version
+          `SELECT id, table_name, operation, payload, timestamp, schema_version, depends_on
            FROM sync_queue
            WHERE status IN ('PENDING', 'FAILED')
              AND next_retry_at <= (strftime('%s', 'now') * 1000)
@@ -337,6 +354,9 @@ export function createSyncStorage(
             payload,
             timestamp: row.timestamp,
             schemaVersion: typeof row.schema_version === 'number' ? row.schema_version : 1,
+            dependsOn: typeof row.depends_on === 'string'
+              ? JSON.parse(row.depends_on) as string[]
+              : undefined,
           };
         }).filter((mutation): mutation is SyncMutation<SyncRecord> => mutation !== null);
         for (const mutation of mutations) {
@@ -438,6 +458,26 @@ export function createSyncStorage(
          WHERE excluded.updated_at >= sync_records.updated_at`,
         [tableName, recordId, JSON.stringify({ id: recordId }), timestamp],
       );
+    },
+    remapRecordId: (tableName, fromId, toId) => {
+      if (fromId === toId) return;
+      database.executeSync('BEGIN IMMEDIATE TRANSACTION');
+      try {
+        database.executeSync(
+          `UPDATE sync_records SET record_id = ?, payload = json_set(payload, '$.id', ?)
+           WHERE table_name = ? AND record_id = ?`,
+          [toId, toId, tableName, fromId],
+        );
+        database.executeSync(
+          `UPDATE sync_queue SET payload = json_set(payload, '$.id', ?)
+           WHERE table_name = ? AND json_extract(payload, '$.id') = ?`,
+          [toId, tableName, fromId],
+        );
+        database.executeSync('COMMIT');
+      } catch (error) {
+        database.executeSync('ROLLBACK');
+        throw error;
+      }
     },
     replaceTable: (tableName, records, tombstones, timestamp) => {
       database.executeSync('BEGIN IMMEDIATE TRANSACTION');

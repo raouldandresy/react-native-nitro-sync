@@ -26,6 +26,7 @@ export interface NitroSync extends HybridObject<{ ios: 'c++'; android: 'c++' }> 
     recordId: string,
     recordPayload: string,
     deleted: boolean,
+    dependsOn: string,
   ): void;
   enqueueMutation(
     id: string,
@@ -34,6 +35,7 @@ export interface NitroSync extends HybridObject<{ ios: 'c++'; android: 'c++' }> 
     payload: string,
     timestamp: number,
     schemaVersion: number,
+    dependsOn: string,
   ): void;
   listPendingMutations(limit: number): string[];
   listPendingMutationsForTable(tableName: string, limit: number): string[];
@@ -47,6 +49,7 @@ export interface NitroSync extends HybridObject<{ ios: 'c++'; android: 'c++' }> 
   removeMutation(id: string): void;
   upsertRecord(tableName: string, recordId: string, payload: string, timestamp: number): void;
   deleteRecord(tableName: string, recordId: string, timestamp: number): void;
+  remapRecordId(tableName: string, fromId: string, toId: string): void;
   replaceTable(
     tableName: string,
     records: string[],

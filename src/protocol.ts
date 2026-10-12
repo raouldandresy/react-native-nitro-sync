@@ -31,6 +31,16 @@ export function buildSyncRequestPayload(
       throw new Error('Invalid schema migration metadata: fromVersion must be older than schemaVersion');
     }
   }
+  for (const mutation of mutations) {
+    if (mutation.dependsOn !== undefined && (
+      !Array.isArray(mutation.dependsOn) ||
+      mutation.dependsOn.some((dependency: string) => typeof dependency !== 'string' || dependency.length === 0) ||
+      new Set(mutation.dependsOn).size !== mutation.dependsOn.length ||
+      mutation.dependsOn.includes(mutation.id)
+    )) {
+      throw new Error(`Invalid mutation dependencies for "${mutation.id}"`);
+    }
+  }
   return {
     protocolVersion: SYNC_PROTOCOL_VERSION,
     tableName,
@@ -83,11 +93,19 @@ function validateSchemaMigration(migration: SyncSchemaMigration): void {
 export function normalizeSyncResponse<T extends SyncRecord>(
   value: unknown,
 ): Required<Pick<SyncTransportResponse<T>, 'protocolVersion' | 'acknowledgedMutationIds' | 'serverTimestamp' | 'tombstones' | 'rejectedMutations'>>
-  & Pick<SyncTransportResponse<T>, 'records' | 'serverCursor' | 'serverVersion' | 'resetRequired' | 'minimumSchemaVersion'> {
+  & Pick<SyncTransportResponse<T>, 'records' | 'serverCursor' | 'serverVersion' | 'resetRequired' | 'minimumSchemaVersion' | 'idMap'> {
   if (!isObject(value)) {
     throw new Error('Invalid sync response: expected an object');
   }
   const response = value;
+  if (response.idMap !== undefined && (
+    !isObject(response.idMap) ||
+    Object.entries(response.idMap).some(([from, to]) => (
+      from.length === 0 || typeof to !== 'string' || to.length === 0
+    ))
+  )) {
+    throw new Error('Invalid sync response: idMap must map non-empty IDs to non-empty strings');
+  }
   if (
     response.resetRequired !== undefined &&
     typeof response.resetRequired !== 'boolean'
@@ -187,5 +205,6 @@ export function normalizeSyncResponse<T extends SyncRecord>(
     ...(response.serverVersion === undefined
       ? {}
       : { serverVersion: response.serverVersion as number | null }),
+    ...(response.idMap === undefined ? {} : { idMap: response.idMap as Readonly<Record<string, string>> }),
   };
 }

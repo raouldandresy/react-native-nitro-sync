@@ -56,6 +56,7 @@ describe('sync protocol helpers', () => {
         columns: { todos: ['archived'] },
       },
     });
+
     expect(() => buildSyncRequestPayload('todos', [], null, undefined, undefined, undefined, 0))
       .toThrow('schemaVersion');
     expect(() => buildSyncRequestPayload(
@@ -88,6 +89,28 @@ describe('sync protocol helpers', () => {
       3,
       { fromVersion: 3, tables: ['todos'], columns: {} },
     )).toThrow('fromVersion must be older');
+  });
+
+  it('validates mutation dependencies and ID mappings', () => {
+    expect(buildSyncRequestPayload('todos', [{
+      id: 'child',
+      tableName: 'todos',
+      operation: 'CREATE',
+      payload: { id: 'child' },
+      timestamp: 1,
+      dependsOn: ['parent'],
+    }], null).mutations[0].dependsOn).toEqual(['parent']);
+    expect(() => buildSyncRequestPayload('todos', [{
+      id: 'child',
+      tableName: 'todos',
+      operation: 'CREATE',
+      payload: { id: 'child' },
+      timestamp: 1,
+      dependsOn: ['child'],
+    }], null)).toThrow('dependencies');
+    expect(normalizeSyncResponse({ idMap: { temporary: 'server-id' } }).idMap)
+      .toEqual({ temporary: 'server-id' });
+    expect(() => normalizeSyncResponse({ idMap: { temporary: '' } })).toThrow('idMap');
   });
 
   it('normalizes the response contract with explicit cursor and version metadata', () => {

@@ -147,6 +147,7 @@ export function parseSerializedMutation(serialized: string): SyncMutation<SyncRe
     readonly payload: string | SyncRecord;
     readonly timestamp: number;
     readonly schemaVersion?: number;
+    readonly dependsOn?: string | readonly string[];
   };
   const payload = typeof raw.payload === 'string'
     ? JSON.parse(raw.payload) as SyncRecord
@@ -162,6 +163,11 @@ export function parseSerializedMutation(serialized: string): SyncMutation<SyncRe
       raw.schemaVersion > 0
       ? raw.schemaVersion
       : 1,
+    ...(raw.dependsOn === undefined ? {} : {
+      dependsOn: typeof raw.dependsOn === 'string'
+        ? JSON.parse(raw.dependsOn) as string[]
+        : raw.dependsOn,
+    }),
   };
 }
 

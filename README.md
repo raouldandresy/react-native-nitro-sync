@@ -188,7 +188,7 @@ export function TodoList() {
 
 ## Transport contract
 
-The `SyncTransport` receives a batch for one table at a time. The request includes `protocolVersion: 1`, `tableName`, `deviceId`, `mutations`, `lastSyncedAt`, and optional per-table `serverCursor` and `serverVersion`. Each mutation has an immutable ID, operation, payload, timestamp, and `schemaVersion` (default `1`, configurable using `config.schemaVersions`).
+The `SyncTransport` receives a batch for one table at a time. The request includes `protocolVersion: 1`, `tableName`, `deviceId`, `mutations`, `lastSyncedAt`, and optional per-table `serverCursor` and `serverVersion`. Each mutation has an immutable ID, operation, payload, timestamp, and `schemaVersion` (default `1`, configurable using `config.schemaVersions`). Mutations may also include optional `dependsOn` mutation IDs; dependent mutations remain queued until their prerequisites are no longer pending. Both TypeScript and native queues persist this metadata.
 
 Application data migrations are separate from the internal queue schema. Set
 `config.schemaVersion` to the installed app-data version and optionally provide
@@ -222,7 +222,11 @@ An example successful response:
 }
 ```
 
-`records`, `tombstones`, acknowledgements, and rejections are optional. A tombstone contains an `id` and finite numeric `timestamp`. A rejection contains `mutationId` and `code`, and may include `message` and `retryable`; explicitly permanent rejections are retained in `REJECTED` and are not retried automatically. Unacknowledged mutations remain retryable. The response parser rejects malformed structures and unsupported protocol versions. Only acknowledgement/rejection IDs from the submitted batch are settled.
+`records`, `tombstones`, acknowledgements, rejections, and `idMap` are optional.
+When present, `idMap` maps a locally generated record ID to its authoritative
+server ID. The provider remaps the persisted record, tombstone, root mutation
+payload ID, and in-memory snapshot atomically per table before continuing
+response processing. A tombstone contains an `id` and finite numeric `timestamp`. A rejection contains `mutationId` and `code`, and may include `message` and `retryable`; explicitly permanent rejections are retained in `REJECTED` and are not retried automatically. Unacknowledged mutations remain retryable. The response parser rejects malformed structures and unsupported protocol versions. Only acknowledgement/rejection IDs from the submitted batch are settled.
 
 When an incremental cursor cannot be used, the server may return `"resetRequired": true`
 and must include the complete authoritative `records` snapshot for that table. Optional
