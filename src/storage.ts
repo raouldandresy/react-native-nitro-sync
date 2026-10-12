@@ -40,6 +40,12 @@ export interface SyncStorage {
   readonly removeMutation: (id: string) => void;
   readonly saveRecord: (tableName: string, record: SyncRecord, timestamp: number) => void;
   readonly removeRecord: (tableName: string, recordId: string, timestamp: number) => void;
+  readonly replaceTable?: (
+    tableName: string,
+    records: readonly SyncRecord[],
+    tombstones: readonly SyncTombstone[],
+    timestamp: number,
+  ) => void;
   readonly getLastSyncedAt: () => number | null;
   readonly setLastSyncedAt: (timestamp: number) => void;
   readonly getServerCursor: (tableName: string) => string | null;
@@ -432,6 +438,33 @@ export function createSyncStorage(
          WHERE excluded.updated_at >= sync_records.updated_at`,
         [tableName, recordId, JSON.stringify({ id: recordId }), timestamp],
       );
+    },
+    replaceTable: (tableName, records, tombstones, timestamp) => {
+      database.executeSync('BEGIN IMMEDIATE TRANSACTION');
+      try {
+        database.executeSync(
+          'DELETE FROM sync_records WHERE table_name = ?',
+          [tableName],
+        );
+        for (const record of records) {
+          database.executeSync(
+            `INSERT INTO sync_records(table_name, record_id, payload, updated_at, deleted)
+             VALUES (?, ?, ?, ?, 0)`,
+            [tableName, record.id, JSON.stringify(record), timestamp],
+          );
+        }
+        for (const tombstone of tombstones) {
+          database.executeSync(
+            `INSERT INTO sync_records(table_name, record_id, payload, updated_at, deleted)
+             VALUES (?, ?, ?, ?, 1)`,
+            [tableName, tombstone.id, JSON.stringify({ id: tombstone.id }), tombstone.timestamp],
+          );
+        }
+        database.executeSync('COMMIT');
+      } catch (error) {
+        database.executeSync('ROLLBACK');
+        throw error;
+      }
     },
     getLastSyncedAt: () => {
       return readSyncLastSyncedAt(metadataStore);

@@ -41,6 +41,7 @@ class NitroSync final : public HybridNitroSyncSpec {
   void removeMutation(const std::string& id) override;
   void upsertRecord(const std::string& tableName, const std::string& recordId, const std::string& payload, double timestamp) override;
   void deleteRecord(const std::string& tableName, const std::string& recordId, double timestamp) override;
+  void replaceTable(const std::string& tableName, const std::vector<std::string>& records, const std::vector<std::string>& tombstones, double timestamp) override;
   std::vector<std::string> readRecords(const std::string& tableName) override;
   std::vector<std::string> readTombstones(const std::string& tableName) override;
   void clearTombstone(const std::string& tableName, const std::string& recordId, double throughTimestamp) override;

@@ -57,6 +57,11 @@ class MutationQueue {
   void remove(const std::string& id);
   void upsertRecord(const std::string& tableName, const std::string& recordId, const std::string& payload, std::int64_t timestamp);
   void deleteRecord(const std::string& tableName, const std::string& recordId, std::int64_t timestamp);
+  void replaceTable(
+      const std::string& tableName,
+      const std::vector<std::string>& records,
+      const std::vector<std::string>& tombstones,
+      std::int64_t timestamp);
   std::vector<std::string> readRecords(const std::string& tableName) const;
   std::vector<Tombstone> readTombstones(const std::string& tableName) const;
   void clearTombstone(const std::string& tableName, const std::string& recordId, std::int64_t throughTimestamp);

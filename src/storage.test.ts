@@ -243,6 +243,10 @@ function createMemoryDatabase(initialUserVersion = 0): SyncSqliteDatabase & {
       }
       if (normalized.startsWith('DELETE FROM sync_records WHERE table_name = ?')) {
         const rows = tables.get('sync_records') ?? [];
+        if (params.length === 1) {
+          tables.set('sync_records', rows.filter((row) => row.table_name !== params[0]));
+          return { rows: [] };
+        }
         const [tableName, recordId, throughTimestamp] = params;
         tables.set('sync_records', rows.filter((row) => !(
           row.table_name === tableName &&
@@ -564,6 +568,26 @@ describe('createSyncStorage tombstones', () => {
     expect(restartedStorage.getServerVersion('todos/work')).toBe(10);
     expect(restartedStorage.getServerCursor('notes')).toBe('cursor-3');
     expect(restartedStorage.getServerVersion('notes')).toBe(3);
+  });
+
+  it('replaces a table atomically while retaining the supplied tombstones', () => {
+    const storage = createSyncStorage(createMemoryDatabase());
+    storage.initialize();
+    storage.saveRecord('todos', { id: 'stale', title: 'remove me' }, 1);
+
+    storage.replaceTable(
+      'todos',
+      [{ id: 'fresh', title: 'server snapshot' }],
+      [{ id: 'deleted', timestamp: 12 }],
+      12,
+    );
+
+    expect(storage.loadRecords('todos')).toEqual([
+      { id: 'fresh', title: 'server snapshot' },
+    ]);
+    expect(storage.loadTombstones('todos')).toEqual([
+      { id: 'deleted', timestamp: 12 },
+    ]);
   });
 
   it('persists configured mutation schema versions through queue claims and retries', () => {

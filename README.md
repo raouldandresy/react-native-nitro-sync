@@ -18,6 +18,7 @@ For component responsibilities, persistence, native registration, and outstandin
 - Inspect and retry or discard permanently rejected mutations with their stored server code/message.
 - Nitro C++ queue plus a TypeScript/OP-SQLite storage adapter and MMKV-compatible metadata storage.
 - Versioned client/server request and response contract (`protocolVersion: 1`), per-table cursors, acknowledgements, and permanent/retryable rejections.
+- Replacement sync for authoritative per-table snapshots when incremental cursors must be discarded.
 - Configurable record merge strategies and persisted delete tombstones.
 - Expo config plugin and native background entry points; execution is subject to operating-system scheduling and host-app integration.
 - An Expo Router example with Notes, Tasks, Sync, and Guide screens using an in-memory mock transport.
@@ -204,6 +205,13 @@ An example successful response:
 ```
 
 `records`, `tombstones`, acknowledgements, and rejections are optional. A tombstone contains an `id` and finite numeric `timestamp`. A rejection contains `mutationId` and `code`, and may include `message` and `retryable`; explicitly permanent rejections are retained in `REJECTED` and are not retried automatically. Unacknowledged mutations remain retryable. The response parser rejects malformed structures and unsupported protocol versions. Only acknowledgement/rejection IDs from the submitted batch are settled.
+
+When an incremental cursor cannot be used, the server may return `"resetRequired": true`
+and must include the complete authoritative `records` snapshot for that table. Optional
+`tombstones` are applied with the snapshot. The client removes stale local rows, preserves
+unacknowledged optimistic mutations, applies the replacement atomically, and only then
+persists the returned cursor/version. A failed replacement leaves the previous snapshot and
+cursor available for retry.
 
 The backend must make mutation processing idempotent by mutation ID, ideally in the same transaction as its data changes. Cursor values must be stable per table and advance only past changes included in that response. The client stores a returned cursor after processing the table response; it cannot detect a server that silently skips changes. Protect the endpoint with the host application's authentication and authorization. The example `apiTransport` sends the protocol shape but does not implement a server.
 

@@ -28,11 +28,20 @@ function isObject(value: unknown): value is Record<string, unknown> {
 export function normalizeSyncResponse<T extends SyncRecord>(
   value: unknown,
 ): Required<Pick<SyncTransportResponse<T>, 'protocolVersion' | 'acknowledgedMutationIds' | 'serverTimestamp' | 'tombstones' | 'rejectedMutations'>>
-  & Pick<SyncTransportResponse<T>, 'records' | 'serverCursor' | 'serverVersion'> {
+  & Pick<SyncTransportResponse<T>, 'records' | 'serverCursor' | 'serverVersion' | 'resetRequired'> {
   if (!isObject(value)) {
     throw new Error('Invalid sync response: expected an object');
   }
   const response = value;
+  if (
+    response.resetRequired !== undefined &&
+    typeof response.resetRequired !== 'boolean'
+  ) {
+    throw new Error('Invalid sync response: resetRequired must be a boolean');
+  }
+  if (response.resetRequired === true && response.records === undefined) {
+    throw new Error('Invalid sync response: resetRequired requires records');
+  }
   if (
     response.protocolVersion !== undefined &&
     response.protocolVersion !== SYNC_PROTOCOL_VERSION
@@ -100,6 +109,7 @@ export function normalizeSyncResponse<T extends SyncRecord>(
   }
   return {
     protocolVersion: SYNC_PROTOCOL_VERSION,
+    ...(response.resetRequired === true ? { resetRequired: true } : {}),
     records: response.records as readonly T[] | undefined,
     tombstones: (response.tombstones as SyncTransportResponse<T>['tombstones']) ?? [],
     acknowledgedMutationIds: (response.acknowledgedMutationIds as readonly string[] | undefined) ?? [],

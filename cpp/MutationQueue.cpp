@@ -450,6 +450,54 @@ void MutationQueue::deleteRecord(const std::string& tableName, const std::string
   checkSqlite(sqlite3_step(statement.get()), database_, "Deleting record");
 }
 
+void MutationQueue::replaceTable(
+    const std::string& tableName,
+    const std::vector<std::string>& records,
+    const std::vector<std::string>& tombstones,
+    std::int64_t timestamp) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  execute("BEGIN IMMEDIATE TRANSACTION");
+  try {
+    Statement clear = prepare(
+        database_,
+        "DELETE FROM sync_records WHERE table_name = ?",
+        "Preparing table replacement");
+    sqlite3_bind_text(clear.get(), 1, tableName.c_str(), -1, SQLITE_TRANSIENT);
+    checkSqlite(sqlite3_step(clear.get()), database_, "Clearing table for replacement");
+
+    for (const std::string& payload : records) {
+      Statement insert = prepare(
+          database_,
+          "INSERT INTO sync_records(table_name, record_id, payload, updated_at, deleted) "
+          "SELECT ?, json_extract(?, '$.id'), ?, ?, 0",
+          "Preparing replacement record");
+      sqlite3_bind_text(insert.get(), 1, tableName.c_str(), -1, SQLITE_TRANSIENT);
+      sqlite3_bind_text(insert.get(), 2, payload.c_str(), -1, SQLITE_TRANSIENT);
+      sqlite3_bind_text(insert.get(), 3, payload.c_str(), -1, SQLITE_TRANSIENT);
+      sqlite3_bind_int64(insert.get(), 4, timestamp);
+      checkSqlite(sqlite3_step(insert.get()), database_, "Inserting replacement record");
+    }
+
+    for (const std::string& tombstone : tombstones) {
+      Statement insert = prepare(
+          database_,
+          "INSERT INTO sync_records(table_name, record_id, payload, updated_at, deleted) "
+          "SELECT ?, json_extract(?, '$.id'), ?, json_extract(?, '$.timestamp'), 1",
+          "Preparing replacement tombstone");
+      const std::string payload = tombstone;
+      sqlite3_bind_text(insert.get(), 1, tableName.c_str(), -1, SQLITE_TRANSIENT);
+      sqlite3_bind_text(insert.get(), 2, tombstone.c_str(), -1, SQLITE_TRANSIENT);
+      sqlite3_bind_text(insert.get(), 3, payload.c_str(), -1, SQLITE_TRANSIENT);
+      sqlite3_bind_text(insert.get(), 4, tombstone.c_str(), -1, SQLITE_TRANSIENT);
+      checkSqlite(sqlite3_step(insert.get()), database_, "Inserting replacement tombstone");
+    }
+    execute("COMMIT");
+  } catch (...) {
+    execute("ROLLBACK");
+    throw;
+  }
+}
+
 std::vector<std::string> MutationQueue::readRecords(const std::string& tableName) const {
   std::lock_guard<std::mutex> lock(mutex_);
   std::vector<std::string> records;

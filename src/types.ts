@@ -34,6 +34,7 @@ export interface SyncMutation<T extends JsonObject = JsonObject> {
 
 export interface SyncTransportResponse<T extends SyncRecord = SyncRecord> {
   readonly protocolVersion?: number;
+  readonly resetRequired?: boolean;
   readonly records?: readonly T[];
   readonly tombstones?: readonly SyncTombstone[];
   readonly acknowledgedMutationIds?: readonly string[];

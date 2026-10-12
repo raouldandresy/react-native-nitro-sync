@@ -194,6 +194,7 @@ void NitroSync::discardRejectedMutation(const std::string& id) { queue().discard
 void NitroSync::removeMutation(const std::string& id) { queue().remove(id); }
 void NitroSync::upsertRecord(const std::string& tableName, const std::string& recordId, const std::string& payload, double timestamp) { queue().upsertRecord(tableName, recordId, payload, static_cast<std::int64_t>(timestamp)); }
 void NitroSync::deleteRecord(const std::string& tableName, const std::string& recordId, double timestamp) { queue().deleteRecord(tableName, recordId, static_cast<std::int64_t>(timestamp)); }
+void NitroSync::replaceTable(const std::string& tableName, const std::vector<std::string>& records, const std::vector<std::string>& tombstones, double timestamp) { queue().replaceTable(tableName, records, tombstones, static_cast<std::int64_t>(timestamp)); }
 std::vector<std::string> NitroSync::readRecords(const std::string& tableName) { return queue().readRecords(tableName); }
 std::vector<std::string> NitroSync::readTombstones(const std::string& tableName) {
   std::vector<std::string> serialized;

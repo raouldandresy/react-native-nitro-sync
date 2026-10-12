@@ -47,6 +47,12 @@ export interface NitroSync extends HybridObject<{ ios: 'c++'; android: 'c++' }> 
   removeMutation(id: string): void;
   upsertRecord(tableName: string, recordId: string, payload: string, timestamp: number): void;
   deleteRecord(tableName: string, recordId: string, timestamp: number): void;
+  replaceTable(
+    tableName: string,
+    records: string[],
+    tombstones: string[],
+    timestamp: number,
+  ): void;
   readRecords(tableName: string): string[];
   readTombstones(tableName: string): string[];
   clearTombstone(tableName: string, recordId: string, throughTimestamp: number): void;

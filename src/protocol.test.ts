@@ -61,6 +61,23 @@ describe('sync protocol helpers', () => {
     });
   });
 
+  it('requires a complete snapshot when the server requests replacement sync', () => {
+    expect(normalizeSyncResponse({
+      resetRequired: true,
+      records: [{ id: 'todo-1', title: 'restored' }],
+      tombstones: [{ id: 'todo-2', timestamp: 9 }],
+      serverCursor: 'replacement-cursor',
+    })).toMatchObject({
+      resetRequired: true,
+      records: [{ id: 'todo-1', title: 'restored' }],
+      serverCursor: 'replacement-cursor',
+    });
+    expect(() => normalizeSyncResponse({ resetRequired: true }))
+      .toThrow('resetRequired requires records');
+    expect(() => normalizeSyncResponse({ resetRequired: 'yes' }))
+      .toThrow('resetRequired must be a boolean');
+  });
+
   it('rejects malformed response acknowledgements and tombstones explicitly', () => {
     expect(() => normalizeSyncResponse({ acknowledgedMutationIds: ['ok', 12] }))
       .toThrow('acknowledgedMutationIds must be an array of strings');

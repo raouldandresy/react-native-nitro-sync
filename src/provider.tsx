@@ -66,6 +66,7 @@ function createConfiguredTransport(config: NitroSyncConfig): SyncTransport | und
   }
   return await response.json() as {
     readonly protocolVersion?: number;
+    readonly resetRequired?: boolean;
     readonly records?: readonly T[];
     readonly tombstones?: readonly { readonly id: string; readonly timestamp: number }[];
     readonly acknowledgedMutationIds?: readonly string[];
@@ -190,6 +191,28 @@ export function NitroSyncProvider({ config, children }: NitroSyncProviderProps):
     }
   }, [config.nativeEngine, storage]);
 
+  const replaceStoredTable = useCallback((
+    tableName: string,
+    tableRecords: readonly SyncRecord[],
+    tableTombstones: readonly { readonly id: string; readonly timestamp: number }[],
+    timestamp: number,
+  ): void => {
+    const nativeEngine = config.nativeEngine ?? getNitroSync();
+    if (nativeEngine !== null && nativeEngine !== undefined) {
+      nativeEngine.replaceTable(
+        tableName,
+        tableRecords.map((record) => JSON.stringify(record)),
+        tableTombstones.map((tombstone) => JSON.stringify(tombstone)),
+        timestamp,
+      );
+      return;
+    }
+    if (storage?.replaceTable === undefined) {
+      throw new Error('SyncStorage must implement replaceTable for replacement sync');
+    }
+    storage.replaceTable(tableName, tableRecords, tableTombstones, timestamp);
+  }, [config.nativeEngine, storage]);
+
   const ensureTable = useCallback((tableName: string) => {
     if (recordsRef.current[tableName] !== undefined) {
       return;
@@ -278,51 +301,88 @@ export function NitroSyncProvider({ config, children }: NitroSyncProviderProps):
             );
             const acknowledged = new Set(settlement.acknowledged.map((mutation) => mutation.id));
             const unacked = tableMutations.filter((mutation) => !acknowledged.has(mutation.id));
-          const serverRecords = response.records;
-          const serverTimestamp = response.serverTimestamp ?? Date.now();
-          const localTombstones = loadStoredTombstones(tableName);
-          const serverTombstones = response.tombstones ?? [];
-          const tombstonesById = new Map<string, { id: string; timestamp: number }>();
-          for (const tombstone of [...localTombstones, ...serverTombstones]) {
-            const existing = tombstonesById.get(tombstone.id);
-            if (existing === undefined || tombstone.timestamp > existing.timestamp) {
-              tombstonesById.set(tombstone.id, tombstone);
-            }
-          }
-          const tombstones = [...tombstonesById.values()];
-          if (serverRecords !== undefined || serverTombstones.length > 0) {
-            const merged = mergePulledRecords(
-              recordsRef.current[tableName] ?? [],
-              serverRecords ?? [],
-              unacked,
-              config.conflictStrategy ?? 'last-write-wins',
-              tombstones,
-            );
-            recordsRef.current = { ...recordsRef.current, [tableName]: merged };
-            setRecords((current) => ({ ...current, [tableName]: merged }));
-            const protectedIds = new Set(
-              unacked
-                .map((mutation) => mutation.payload.id)
-                .filter((id): id is string => typeof id === 'string'),
-            );
-            const mergedById = new Map(merged.map((record) => [record.id, record]));
-            const tombstoneTimestamps = new Map(tombstones.map(({ id, timestamp }) => [id, timestamp]));
-            for (const record of serverRecords ?? []) {
-              const resolved = mergedById.get(record.id);
-              if (!protectedIds.has(record.id) && resolved !== undefined) {
-                const tombstoneTimestamp = tombstoneTimestamps.get(record.id);
-                const timestamp = tombstoneTimestamp === undefined
-                  ? serverTimestamp
-                  : Math.max(serverTimestamp, timestampOf(record), tombstoneTimestamp + 1);
-                persistRecord(tableName, resolved, timestamp, false);
+            const serverRecords = response.records;
+            const serverTimestamp = response.serverTimestamp ?? Date.now();
+            const localTombstones = loadStoredTombstones(tableName);
+            const serverTombstones = response.tombstones ?? [];
+            const tombstonesById = new Map<string, { id: string; timestamp: number }>();
+            for (const tombstone of [...localTombstones, ...serverTombstones]) {
+              const existing = tombstonesById.get(tombstone.id);
+              if (existing === undefined || tombstone.timestamp > existing.timestamp) {
+                tombstonesById.set(tombstone.id, tombstone);
               }
             }
+            const tombstones = [...tombstonesById.values()];
+            const resetTombstonesById = new Map<string, { id: string; timestamp: number }>();
             for (const tombstone of serverTombstones) {
-              if (!protectedIds.has(tombstone.id)) {
-                persistRecord(tableName, { id: tombstone.id }, tombstone.timestamp, true);
+              resetTombstonesById.set(tombstone.id, tombstone);
+            }
+            if (response.resetRequired === true) {
+              for (const mutation of unacked) {
+                if (mutation.operation !== 'DELETE' || typeof mutation.payload.id !== 'string') {
+                  continue;
+                }
+                const tombstone = {
+                  id: mutation.payload.id,
+                  timestamp: mutation.timestamp,
+                };
+                const existing = resetTombstonesById.get(tombstone.id);
+                if (existing === undefined || tombstone.timestamp > existing.timestamp) {
+                  resetTombstonesById.set(tombstone.id, tombstone);
+                }
               }
             }
-          }
+            const resetTombstones = response.resetRequired === true
+              ? [...resetTombstonesById.values()]
+              : tombstones;
+            if (serverRecords !== undefined || serverTombstones.length > 0) {
+              const protectedIds = new Set(
+                unacked
+                  .map((mutation) => mutation.payload.id)
+                  .filter((id): id is string => typeof id === 'string'),
+              );
+              const localRecords = response.resetRequired === true
+                ? (recordsRef.current[tableName] ?? []).filter((record) => protectedIds.has(record.id))
+                : recordsRef.current[tableName] ?? [];
+              const merged = mergePulledRecords(
+                localRecords,
+                serverRecords ?? [],
+                unacked,
+                config.conflictStrategy ?? 'last-write-wins',
+                resetTombstones,
+              );
+              const deletedIds = new Set(
+                unacked
+                  .filter((mutation) => mutation.operation === 'DELETE')
+                  .map((mutation) => mutation.payload.id)
+                  .filter((id): id is string => typeof id === 'string'),
+              );
+              const visibleMerged = merged.filter((record) => !deletedIds.has(record.id));
+              if (response.resetRequired === true) {
+                replaceStoredTable(tableName, visibleMerged, resetTombstones, serverTimestamp);
+              }
+              recordsRef.current = { ...recordsRef.current, [tableName]: visibleMerged };
+              setRecords((current) => ({ ...current, [tableName]: visibleMerged }));
+              const mergedById = new Map(visibleMerged.map((record) => [record.id, record]));
+              const tombstoneTimestamps = new Map(tombstones.map(({ id, timestamp }) => [id, timestamp]));
+              if (response.resetRequired !== true) {
+                for (const record of serverRecords ?? []) {
+                  const resolved = mergedById.get(record.id);
+                  if (!protectedIds.has(record.id) && resolved !== undefined) {
+                    const tombstoneTimestamp = tombstoneTimestamps.get(record.id);
+                    const timestamp = tombstoneTimestamp === undefined
+                      ? serverTimestamp
+                      : Math.max(serverTimestamp, timestampOf(record), tombstoneTimestamp + 1);
+                    persistRecord(tableName, resolved, timestamp, false);
+                  }
+                }
+                for (const tombstone of serverTombstones) {
+                  if (!protectedIds.has(tombstone.id)) {
+                    persistRecord(tableName, { id: tombstone.id }, tombstone.timestamp, true);
+                  }
+                }
+              }
+            }
           settleSyncMutations(settlement, {
             acknowledge: (mutation) => {
               if (usesNative) {
@@ -356,21 +416,23 @@ export function NitroSyncProvider({ config, children }: NitroSyncProviderProps):
               unackedIds.delete(mutation.id);
             },
           });
-          if (response.serverCursor !== undefined) {
+          if (response.serverCursor !== undefined || response.resetRequired === true) {
+            const nextCursor = response.serverCursor ?? null;
             if (storage !== null) {
-              storage.setServerCursor(tableName, response.serverCursor);
+              storage.setServerCursor(tableName, nextCursor);
             } else {
-              writeSyncServerCursor(config.metadataStore, tableName, response.serverCursor);
+              writeSyncServerCursor(config.metadataStore, tableName, nextCursor);
             }
-            serverCursorsRef.current.set(tableName, response.serverCursor);
+            serverCursorsRef.current.set(tableName, nextCursor);
           }
-          if (response.serverVersion !== undefined) {
+          if (response.serverVersion !== undefined || response.resetRequired === true) {
+            const nextVersion = response.serverVersion ?? null;
             if (storage !== null) {
-              storage.setServerVersion(tableName, response.serverVersion);
+              storage.setServerVersion(tableName, nextVersion);
             } else {
-              writeSyncServerVersion(config.metadataStore, tableName, response.serverVersion);
+              writeSyncServerVersion(config.metadataStore, tableName, nextVersion);
             }
-            serverVersionsRef.current.set(tableName, response.serverVersion);
+            serverVersionsRef.current.set(tableName, nextVersion);
           }
           const rejectionErrors = (response.rejectedMutations ?? [])
             .filter((rejection) => (
@@ -432,7 +494,7 @@ export function NitroSyncProvider({ config, children }: NitroSyncProviderProps):
     const next = syncChainRef.current.then(run, run);
     syncChainRef.current = next.then(() => undefined, () => undefined);
     await next;
-  }, [config, loadStoredRecords, loadStoredTombstones, persistRecord, storage, transport]);
+  }, [config, loadStoredRecords, loadStoredTombstones, persistRecord, replaceStoredTable, storage, transport]);
 
   useEffect(() => {
     const interval = config.pollingIntervalMs ?? 0;

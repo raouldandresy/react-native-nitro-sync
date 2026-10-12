@@ -57,6 +57,12 @@ The queue stores `CREATE`, `UPDATE`, and `DELETE` mutations with timestamp and s
 5. Acknowledged mutations are removed, permanent rejections are marked `REJECTED`, and unacknowledged/retryable mutations are marked `FAILED`.
 6. The response's cursor/version and the latest sync timestamp are persisted for later requests.
 
+If the server returns `resetRequired: true`, the response must contain a complete table
+snapshot. The provider removes stale local rows, preserves unacknowledged optimistic
+mutations and their delete tombstones, atomically replaces the table snapshot, and only
+then persists the returned cursor/version. A replacement failure leaves the prior local
+snapshot and cursor intact.
+
 The backend must deduplicate mutation IDs atomically with its own changes and return cursors that do not skip changes. The client cannot detect a backend that advances a cursor past omitted records. A global request batch limit of 100 is used; this is not a server pagination protocol.
 
 ## Persistence
